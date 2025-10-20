@@ -1,3 +1,5 @@
+#NEW CODE
+
 package com.example.obstrue
 
 import android.content.Intent
@@ -7,30 +9,23 @@ import android.media.MediaPlayer
 import android.net.Uri
 import android.provider.OpenableColumns
 import android.widget.Toast
-import androidx.compose.foundation.border
-import androidx.compose.foundation.shape.CircleShape
-
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.scale
@@ -42,76 +37,79 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.foundation.layout.navigationBarsPadding
-import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.navigation.NavHostController
 import androidx.navigation.navOptions
+import androidx.navigation.compose.currentBackStackEntryAsState
 import kotlinx.coroutines.delay
 import java.io.File
 import java.io.FileOutputStream
 import java.io.InputStream
-import androidx.compose.ui.unit.Dp
+
+/**
+ * MsgVoicesScreen.kt
+ *
+ * - Sound label + switch are on the same row and placed ABOVE the sound section (upload/play).
+ * - Jumpscares label + switch are on the same row and placed ABOVE the jumpscare card.
+ * - Main and jumpscare play/pause use the same icons and size.
+ * - Jumpscare sound slider is interactive and seeks while playing.
+ * - Persistent prefs for toggles, selected URIs, and play flags.
+ * - Bottom nav item for current page is disabled.
+ *
+ * Replace resource ids (R.drawable.* / R.raw.*) with your project's assets.
+ */
 
 @Composable
 fun MsgVoicesScreen(navController: NavHostController) {
     val context = LocalContext.current
+    val prefs = remember { context.getSharedPreferences("obstrue_prefs", android.content.Context.MODE_PRIVATE) }
 
-    // UI state
-    var isSoundOn by remember { mutableStateOf(true) }
-    var message by remember { mutableStateOf("") }
-    var selectedFileUri by remember { mutableStateOf<Uri?>(null) }
-    var selectedFileName by remember { mutableStateOf<String?>(null) }
+    // ---------- Persisted/UI State ----------
+    var isSoundOn by rememberSaveable { mutableStateOf(prefs.getBoolean("saved_sound_on", true)) }
+    var message by rememberSaveable { mutableStateOf(prefs.getString("saved_message", "") ?: "") }
+    var selectedFileUriStr by rememberSaveable { mutableStateOf(prefs.getString("saved_video_uri", null)) }
+    var selectedFileName by rememberSaveable { mutableStateOf(prefs.getString("saved_video_name", null)) }
+    val selectedFileUri: Uri? = selectedFileUriStr?.let { Uri.parse(it) }
 
-    // jumpscare state
-    var jumpscaresOn by remember { mutableStateOf(false) }
-    // 0 = burger, 1 = jobapp, 2 = custom
-    var jumpscareSelectedIndex by remember { mutableStateOf(0) }
-    var jumpscareCustomUri by remember { mutableStateOf<Uri?>(null) }
+    var jumpscaresOn by rememberSaveable { mutableStateOf(prefs.getBoolean("saved_jumpscares_on", false)) }
+    var jumpscareSelectedIndex by rememberSaveable { mutableStateOf(prefs.getInt("saved_jumpscare_index", 0)) }
+    var jumpscareCustomUriStr by rememberSaveable { mutableStateOf(prefs.getString("saved_jumpscare_custom_uri", null)) }
+    val jumpscareCustomUri: Uri? = jumpscareCustomUriStr?.let { Uri.parse(it) }
     var jumpscareCustomBitmap by remember { mutableStateOf<ImageBitmap?>(null) }
 
-    // playback state for main mp4
+    // Main media player (prepared on demand)
     var mediaPlayer by remember { mutableStateOf<MediaPlayer?>(null) }
     var durationMs by remember { mutableStateOf(0) }
     var currentPositionMs by remember { mutableStateOf(0) }
-    var isPlaying by remember { mutableStateOf(false) }
+    var isPlaying by remember { mutableStateOf(prefs.getBoolean("saved_is_playing", false)) }
     var isSeeking by remember { mutableStateOf(false) }
     var seekPercent by remember { mutableStateOf(0f) }
 
-    // no-ripple interaction source (kept for other clickables if needed)
-    val noRipple = remember { MutableInteractionSource() }
-
-    var showPermissionDialog by remember { mutableStateOf(false) }
-
-    // NEW: Random toggle state
-    var randomOn by remember { mutableStateOf(false) }
-    // animated scale when toggled
+    // Random/sample
+    var randomOn by rememberSaveable { mutableStateOf(prefs.getBoolean("saved_random_on", false)) }
     val randomScale by animateFloatAsState(if (randomOn) 1.06f else 1f)
 
-    // --------- jumpscare SOUNDS state (new) ---------
-    // index: 0=Scream1 (bundled), 1=Scream2 (bundled), 2=Custom
-    var jumpscareSoundSelectedIndex by remember { mutableStateOf(0) }
-    var jumpscareSoundCustomUri by remember { mutableStateOf<Uri?>(null) }
-    var jumpscareSoundName by remember { mutableStateOf<String?>(null) }
+    // Jumpscare sound
+    var jumpscareSoundSelectedIndex by rememberSaveable { mutableStateOf(prefs.getInt("saved_jumpscare_sound_index", 0)) }
     var jumpscareSoundPlayer by remember { mutableStateOf<MediaPlayer?>(null) }
     var jumpscareSoundDurationMs by remember { mutableStateOf(0) }
     var jumpscareSoundCurrentMs by remember { mutableStateOf(0) }
-    var jumpscareSoundIsPlaying by remember { mutableStateOf(false) }
-    var jumpscareSoundIsSeeking by remember { mutableStateOf(false) }
-    var jumpscareSoundSeekPercent by remember { mutableStateOf(0f) }
+    var jumpscareSoundIsPlaying by remember { mutableStateOf(prefs.getBoolean("saved_jumpscare_is_playing", false)) }
 
-    var showSoundPermissionDialog by remember { mutableStateOf(false) }
+    var showPermissionDialog by remember { mutableStateOf(false) }
 
-    // ---------- helpers ----------
+    val noRipple = remember { MutableInteractionSource() }
 
+    // ---------- Helpers ----------
     fun resolveDisplayName(uri: Uri?): String? {
         uri ?: return null
         val resolver = context.contentResolver
@@ -125,22 +123,18 @@ fun MsgVoicesScreen(navController: NavHostController) {
         return uri.lastPathSegment
     }
 
-    // load image bitmap from uri (for custom jumpscare preview)
     fun loadBitmapFromUri(uri: Uri?): ImageBitmap? {
         uri ?: return null
         return try {
-            val input: InputStream? = context.contentResolver.openInputStream(uri)
-            input?.use {
-                val bmp = BitmapFactory.decodeStream(it)
-                bmp?.asImageBitmap()
+            context.contentResolver.openInputStream(uri)?.use {
+                BitmapFactory.decodeStream(it)?.asImageBitmap()
             }
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             null
         }
     }
 
-    // Fallback: copy to cache and prepare (do NOT auto-start)
-    fun fallbackCopyToCacheAndPrepare(uri: Uri): MediaPlayer? {
+    fun fallbackCopyToCacheAndPrepare(uri: Uri, targetForMain: Boolean = true): MediaPlayer? {
         try {
             context.contentResolver.openInputStream(uri)?.use { input ->
                 val temp = File(context.cacheDir, "obstrue_tmp_${System.currentTimeMillis()}.mp4")
@@ -153,14 +147,14 @@ fun MsgVoicesScreen(navController: NavHostController) {
                             .build()
                     )
                     setDataSource(temp.absolutePath)
-                    prepareAsync() // prepare but don't start
+                    prepareAsync()
                     setOnPreparedListener { player ->
-                        durationMs = try { player.duration } catch (_: Exception) { 0 }
-                        isPlaying = player.isPlaying // remain stopped unless it was already playing
+                        if (targetForMain) durationMs = try { player.duration } catch (_: Exception) { 0 }
+                        else jumpscareSoundDurationMs = try { player.duration } catch (_: Exception) { 0 }
                     }
                     setOnCompletionListener {
                         try { it.seekTo(0) } catch (_: Exception) {}
-                        isPlaying = false
+                        if (targetForMain) isPlaying = false else jumpscareSoundIsPlaying = false
                     }
                 }
                 return mp
@@ -173,8 +167,7 @@ fun MsgVoicesScreen(navController: NavHostController) {
         return null
     }
 
-    // Prepare from URI (tries file descriptor first) — does NOT auto-start (used for user-chosen files)
-    fun prepareMediaFromUri(localContext: android.content.Context, uri: Uri): MediaPlayer? {
+    fun prepareMediaFromUri(localContext: android.content.Context, uri: Uri, forJumpscareSound: Boolean = false): MediaPlayer? {
         return try {
             localContext.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
                 val mp = MediaPlayer().apply {
@@ -187,33 +180,27 @@ fun MsgVoicesScreen(navController: NavHostController) {
                     setDataSource(pfd.fileDescriptor)
                     prepareAsync()
                     setOnPreparedListener { player ->
-                        // detect which player we're preparing
-                        // if this is main player, update main duration; if jumpscare, update jumpscare duration later in its effect
-                        durationMs = try { player.duration } catch (_: Exception) { 0 }
-                        isPlaying = player.isPlaying
+                        if (forJumpscareSound) jumpscareSoundDurationMs = try { player.duration } catch (_: Exception) { 0 }
+                        else durationMs = try { player.duration } catch (_: Exception) { 0 }
                     }
                     setOnCompletionListener {
                         try { it.seekTo(0) } catch (_: Exception) {}
-                        isPlaying = false
+                        if (forJumpscareSound) jumpscareSoundIsPlaying = false else isPlaying = false
                     }
                 }
                 mp
-            } ?: run {
-                fallbackCopyToCacheAndPrepare(uri)
-            }
+            } ?: fallbackCopyToCacheAndPrepare(uri, targetForMain = !forJumpscareSound)
         } catch (se: SecurityException) {
-            Toast.makeText(localContext, "Permission denied reading file", Toast.LENGTH_LONG).show()
-            fallbackCopyToCacheAndPrepare(uri)
+            Toast.makeText(localContext, "Permission denied", Toast.LENGTH_LONG).show()
+            fallbackCopyToCacheAndPrepare(uri, targetForMain = !forJumpscareSound)
         } catch (e: Exception) {
             Toast.makeText(localContext, "Can't play selected file: ${e.message}", Toast.LENGTH_SHORT).show()
-            fallbackCopyToCacheAndPrepare(uri)
+            fallbackCopyToCacheAndPrepare(uri, targetForMain = !forJumpscareSound)
         }
     }
 
-    // Prepare media from raw resource (bundled jumpscare sounds)
-    fun prepareMediaFromRes(resId: Int): MediaPlayer? {
+    fun prepareMediaFromRes(resId: Int, forJumpscareSound: Boolean = false): MediaPlayer? {
         return try {
-            // MediaPlayer.create is convenient and returns a prepared player for raw resources
             val mp = MediaPlayer.create(context, resId)
             mp?.setAudioAttributes(
                 AudioAttributes.Builder()
@@ -223,10 +210,12 @@ fun MsgVoicesScreen(navController: NavHostController) {
             )
             mp?.setOnCompletionListener {
                 try { it.seekTo(0) } catch (_: Exception) {}
-                jumpscareSoundIsPlaying = false
+                if (forJumpscareSound) jumpscareSoundIsPlaying = false else isPlaying = false
             }
-            // set initial duration if available
-            mp?.let { jumpscareSoundDurationMs = try { it.duration } catch (_: Exception) { 0 } }
+            mp?.let {
+                if (forJumpscareSound) jumpscareSoundDurationMs = try { it.duration } catch (_: Exception) { 0 }
+                else durationMs = try { it.duration } catch (_: Exception) { 0 }
+            }
             mp
         } catch (e: Exception) {
             Toast.makeText(context, "Can't load resource: ${e.message}", Toast.LENGTH_SHORT).show()
@@ -234,7 +223,6 @@ fun MsgVoicesScreen(navController: NavHostController) {
         }
     }
 
-    // Safely release and nullify jumpscare sound player (no-arg for convenience)
     fun releaseJumpscareSoundPlayer() {
         try {
             jumpscareSoundPlayer?.let { p ->
@@ -246,130 +234,18 @@ fun MsgVoicesScreen(navController: NavHostController) {
         jumpscareSoundDurationMs = 0
         jumpscareSoundCurrentMs = 0
         jumpscareSoundIsPlaying = false
-        jumpscareSoundSeekPercent = 0f
+        prefs.edit().putBoolean("saved_jumpscare_is_playing", false).apply()
     }
 
-    // ---------- Load saved prefs (prepare but DO NOT autoplay) ----------
-    LaunchedEffect(Unit) {
-        val prefs = context.getSharedPreferences("obstrue_prefs", android.content.Context.MODE_PRIVATE)
-        message = prefs.getString("saved_message", "") ?: ""
-        randomOn = prefs.getBoolean("saved_random_on", false) // load saved random state
-        isSoundOn = prefs.getBoolean("saved_sound_on", true)
-        jumpscaresOn = prefs.getBoolean("saved_jumpscares_on", false)
-        jumpscareSelectedIndex = prefs.getInt("saved_jumpscare_index", 0)
-        jumpscareSoundSelectedIndex = prefs.getInt("saved_jumpscare_sound_index", 0)
-        val savedUriStr = prefs.getString("saved_video_uri", null)
-        val savedName = prefs.getString("saved_video_name", null)
-        val savedCustomUri = prefs.getString("saved_jumpscare_custom_uri", null)
-        val savedSoundUri = prefs.getString("saved_jumpscare_sound_uri", null)
-        if (!savedCustomUri.isNullOrEmpty()) {
-            try {
-                val uri = Uri.parse(savedCustomUri)
-                jumpscareCustomUri = uri
-                jumpscareCustomBitmap = loadBitmapFromUri(uri)
-                try { context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) } catch (_: Exception) {}
-            } catch (_: Exception) {}
-        }
-        if (!savedSoundUri.isNullOrEmpty()) {
-            try {
-                val uri = Uri.parse(savedSoundUri)
-                jumpscareSoundCustomUri = uri
-                jumpscareSoundName = resolveDisplayName(uri)
-                try { context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) } catch (_: Exception) {}
-            } catch (_: Exception) {}
-        }
-        if (!savedUriStr.isNullOrEmpty()) {
-            try {
-                val uri = Uri.parse(savedUriStr)
-                selectedFileUri = uri
-                selectedFileName = savedName ?: resolveDisplayName(uri)
-                try {
-                    context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                } catch (_: Exception) { /* ignore */ }
-
-                prepareMediaFromUri(context, uri)?.let { mp ->
-                    mediaPlayer?.release()
-                    mediaPlayer = mp
-                    isPlaying = false // explicitly remain stopped on screen entry
-                }
-            } catch (_: Exception) { /* ignore */ }
-        }
-    }
-
-    // SAF launcher for mp4 (main upload)
-    val openDocumentLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocument()
-    ) { uri: Uri? ->
-        if (jumpscaresOn) {
-            // don't allow picking when jumpscares active
-            Toast.makeText(context, "Disable jumpscares first", Toast.LENGTH_SHORT).show()
-            return@rememberLauncherForActivityResult
-        }
-        uri?.let { pickedUri ->
-            selectedFileUri = pickedUri
-            selectedFileName = resolveDisplayName(pickedUri)
-            try { context.contentResolver.takePersistableUriPermission(pickedUri, Intent.FLAG_GRANT_READ_URI_PERMISSION) } catch (_: Exception) {}
-            prepareMediaFromUri(context, pickedUri)?.let { mp ->
-                mediaPlayer?.release()
-                mediaPlayer = mp
-                isPlaying = false
-            }
-        }
-    }
-
-    // SAF launcher for images (jumpscare custom)
-    val openImageLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocument()
-    ) { uri: Uri? ->
-        uri?.let { pickedUri ->
-            jumpscareCustomUri = pickedUri
-            jumpscareCustomBitmap = loadBitmapFromUri(pickedUri)
-            try { context.contentResolver.takePersistableUriPermission(pickedUri, Intent.FLAG_GRANT_READ_URI_PERMISSION) } catch (_: Exception) {}
-        }
-    }
-
-    // SAF launcher for jumpscare SOUNDS (audio/mp3 and mp4)
-    val openSoundLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocument()
-    ) { uri: Uri? ->
-        uri?.let { pickedUri ->
-            // only accept if jumpscares enabled
-            if (!jumpscaresOn) {
-                Toast.makeText(context, "Enable jumpscares first", Toast.LENGTH_SHORT).show()
-                return@rememberLauncherForActivityResult
-            }
-            jumpscareSoundCustomUri = pickedUri
-            jumpscareSoundName = resolveDisplayName(pickedUri)
-            jumpscareSoundSelectedIndex = 2
-            try { context.contentResolver.takePersistableUriPermission(pickedUri, Intent.FLAG_GRANT_READ_URI_PERMISSION) } catch (_: Exception) {}
-
-            // prepare preview player immediately
-            try {
-                prepareMediaFromUri(context, pickedUri)?.let { mp ->
-                    releaseJumpscareSoundPlayer()
-                    jumpscareSoundPlayer = mp
-                    // set jumpscare-specific listeners
-                    mp.setOnPreparedListener { p ->
-                        jumpscareSoundDurationMs = try { p.duration } catch (_: Exception) { 0 }
-                    }
-                    mp.setOnCompletionListener {
-                        try { it.seekTo(0) } catch (_: Exception) {}
-                        jumpscareSoundIsPlaying = false
-                    }
-                }
-            } catch (e: Exception) {
-                Toast.makeText(context, "Unable to prepare sound: ${e.message}", Toast.LENGTH_SHORT).show()
-            }
-        }
-    }
-
-    // lifecycle observer to pause/release players
+    // ---------- Lifecycle handling ----------
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = object : DefaultLifecycleObserver {
             override fun onPause(owner: LifecycleOwner) {
-                mediaPlayer?.pause(); isPlaying = false
-                jumpscareSoundPlayer?.pause(); jumpscareSoundIsPlaying = false
+                try { mediaPlayer?.pause() } catch (_: Exception) {}
+                isPlaying = false
+                try { jumpscareSoundPlayer?.pause() } catch (_: Exception) {}
+                jumpscareSoundIsPlaying = false
             }
             override fun onDestroy(owner: LifecycleOwner) {
                 try { mediaPlayer?.release() } catch (_: Exception) {}
@@ -386,7 +262,42 @@ fun MsgVoicesScreen(navController: NavHostController) {
         }
     }
 
-    // progress updater for main mp4
+    // ---------- Activity Result Launchers ----------
+    val openDocumentLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
+        if (jumpscaresOn) {
+            Toast.makeText(context, "Disable jumpscares first", Toast.LENGTH_SHORT).show()
+            return@rememberLauncherForActivityResult
+        }
+        uri?.let { pickedUri ->
+            selectedFileUriStr = pickedUri.toString()
+            selectedFileName = resolveDisplayName(pickedUri)
+            try { context.contentResolver.takePersistableUriPermission(pickedUri, Intent.FLAG_GRANT_READ_URI_PERMISSION) } catch (_: Exception) {}
+            prefs.edit().putString("saved_video_uri", selectedFileUriStr).apply()
+            prefs.edit().putString("saved_video_name", selectedFileName).apply()
+            // prepare but don't auto-start (user explicitly plays)
+            prepareMediaFromUri(context, pickedUri, forJumpscareSound = false)?.let { mp ->
+                mediaPlayer?.release()
+                mediaPlayer = mp
+                isPlaying = false
+                prefs.edit().putBoolean("saved_is_playing", false).apply()
+            }
+        }
+    }
+
+    val openImageLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
+        uri?.let { pickedUri ->
+            if (!jumpscaresOn) {
+                Toast.makeText(context, "Enable jumpscares to change images", Toast.LENGTH_SHORT).show()
+                return@rememberLauncherForActivityResult
+            }
+            jumpscareCustomUriStr = pickedUri.toString()
+            jumpscareCustomBitmap = loadBitmapFromUri(pickedUri)
+            try { context.contentResolver.takePersistableUriPermission(pickedUri, Intent.FLAG_GRANT_READ_URI_PERMISSION) } catch (_: Exception) {}
+            prefs.edit().putString("saved_jumpscare_custom_uri", jumpscareCustomUriStr).apply()
+        }
+    }
+
+    // ---------- Progress updaters ----------
     LaunchedEffect(mediaPlayer) {
         while (mediaPlayer != null) {
             val mp = mediaPlayer
@@ -397,13 +308,12 @@ fun MsgVoicesScreen(navController: NavHostController) {
                     val cur = try { mp.currentPosition } catch (_: Exception) { 0 }
                     currentPositionMs = cur
                     if (!isSeeking && durationMs > 0) seekPercent = (currentPositionMs.toFloat() / durationMs.toFloat())
-                } catch (_: Exception) { /* ignore */ }
+                } catch (_: Exception) {}
             }
             delay(250L)
         }
     }
 
-    // progress updater for jumpscare sound preview
     LaunchedEffect(jumpscareSoundPlayer) {
         while (jumpscareSoundPlayer != null) {
             val mp = jumpscareSoundPlayer
@@ -413,41 +323,131 @@ fun MsgVoicesScreen(navController: NavHostController) {
                     if (dur > 0) jumpscareSoundDurationMs = dur
                     val cur = try { mp.currentPosition } catch (_: Exception) { 0 }
                     jumpscareSoundCurrentMs = cur
-                    if (!jumpscareSoundIsSeeking && jumpscareSoundDurationMs > 0)
-                        jumpscareSoundSeekPercent = (jumpscareSoundCurrentMs.toFloat() / jumpscareSoundDurationMs.toFloat())
-                } catch (_: Exception) { /* ignore */ }
+                } catch (_: Exception) {}
             }
             delay(250L)
         }
     }
 
-    // react to isSoundOn conservatively (do not auto-start)
+    // Persist toggles / message / indices
+    LaunchedEffect(isSoundOn) { prefs.edit().putBoolean("saved_sound_on", isSoundOn).apply() }
+    LaunchedEffect(jumpscaresOn) { prefs.edit().putBoolean("saved_jumpscares_on", jumpscaresOn).apply() }
+    LaunchedEffect(jumpscareSelectedIndex) { prefs.edit().putInt("saved_jumpscare_index", jumpscareSelectedIndex).apply() }
+    LaunchedEffect(jumpscareSoundSelectedIndex) { prefs.edit().putInt("saved_jumpscare_sound_index", jumpscareSoundSelectedIndex).apply() }
+    LaunchedEffect(randomOn) { prefs.edit().putBoolean("saved_random_on", randomOn).apply() }
+    LaunchedEffect(message) { prefs.edit().putString("saved_message", message).apply() }
+
+    // Mutual exclusivity behavior: enabling one disables the other
     LaunchedEffect(isSoundOn) {
-        mediaPlayer?.let { mp ->
-            try {
-                if (!isSoundOn && mp.isPlaying) { mp.pause(); isPlaying = false }
-            } catch (_: Exception) { /* ignore */ }
+        if (isSoundOn && jumpscaresOn) {
+            jumpscaresOn = false
+            releaseJumpscareSoundPlayer()
+            prefs.edit().putBoolean("saved_jumpscares_on", false).apply()
         }
-    }
-
-    // When jumpscares toggled ON, force sound off and pause main media
-    LaunchedEffect(jumpscaresOn) {
-        if (jumpscaresOn) {
-            try {
-                mediaPlayer?.pause()
-            } catch (_: Exception) {}
+        if (!isSoundOn) {
+            try { mediaPlayer?.pause() } catch (_: Exception) {}
             isPlaying = false
+            prefs.edit().putBoolean("saved_is_playing", false).apply()
+        }
+    }
+    LaunchedEffect(jumpscaresOn) {
+        if (jumpscaresOn && isSoundOn) {
             isSoundOn = false
-        } else {
-            // also pause jumpscare preview player when disabling
-            try { jumpscareSoundPlayer?.pause() } catch (_: Exception) {}
-            jumpscareSoundIsPlaying = false
+            try { mediaPlayer?.pause() } catch (_: Exception) {}
+            isPlaying = false
+            prefs.edit().putBoolean("saved_is_playing", false).apply()
+            prefs.edit().putBoolean("saved_sound_on", false).apply()
+        }
+        if (!jumpscaresOn) {
+            releaseJumpscareSoundPlayer()
+            prefs.edit().putBoolean("saved_jumpscare_is_playing", false).apply()
         }
     }
 
-    // ---------- UI ----------
-    val configuration = LocalConfiguration.current
+    // Restore custom bitmap if saved
+    LaunchedEffect(jumpscareCustomUriStr) {
+        jumpscareCustomUriStr?.let {
+            try {
+                val u = Uri.parse(it)
+                jumpscareCustomBitmap = loadBitmapFromUri(u)
+            } catch (_: Exception) {}
+        }
+    }
 
+    // Restore main media if persisted; do not auto-start unless user had it playing and allowed
+    LaunchedEffect(selectedFileUriStr) {
+        selectedFileUriStr?.let { uriStr ->
+            try {
+                val uri = Uri.parse(uriStr)
+                if (mediaPlayer == null) {
+                    prepareMediaFromUri(context, uri, forJumpscareSound = false)?.let { mp ->
+                        mediaPlayer?.release()
+                        mediaPlayer = mp
+                        val savedPlay = prefs.getBoolean("saved_is_playing", false)
+                        if (savedPlay && isSoundOn) {
+                            mediaPlayer?.setOnPreparedListener { player ->
+                                durationMs = try { player.duration } catch (_: Exception) { 0 }
+                                try { player.start(); isPlaying = true } catch (_: Exception) {}
+                            }
+                        }
+                    }
+                }
+            } catch (_: Exception) {}
+        }
+    }
+
+    // Prepare jumpscare sound selection with exhaustive when
+    LaunchedEffect(jumpscareSoundSelectedIndex, jumpscareCustomUriStr) {
+        if (!jumpscaresOn) return@LaunchedEffect
+        when (jumpscareSoundSelectedIndex) {
+            0 -> {
+                releaseJumpscareSoundPlayer()
+                jumpscareSoundPlayer = prepareMediaFromRes(R.raw.scream1, forJumpscareSound = true)
+                val saved = prefs.getBoolean("saved_jumpscare_is_playing", false)
+                if (saved) {
+                    jumpscareSoundPlayer?.setOnPreparedListener { p ->
+                        jumpscareSoundDurationMs = try { p.duration } catch (_: Exception) { 0 }
+                        try { p.start(); jumpscareSoundIsPlaying = true } catch (_: Exception) {}
+                    }
+                }
+            }
+            1 -> {
+                releaseJumpscareSoundPlayer()
+                jumpscareSoundPlayer = prepareMediaFromRes(R.raw.scream2, forJumpscareSound = true)
+                val saved = prefs.getBoolean("saved_jumpscare_is_playing", false)
+                if (saved) {
+                    jumpscareSoundPlayer?.setOnPreparedListener { p ->
+                        jumpscareSoundDurationMs = try { p.duration } catch (_: Exception) { 0 }
+                        try { p.start(); jumpscareSoundIsPlaying = true } catch (_: Exception) {}
+                    }
+                }
+            }
+            2 -> {
+                // custom sound (if present)
+                jumpscareCustomUriStr?.let { uriStr ->
+                    try {
+                        val uri = Uri.parse(uriStr)
+                        releaseJumpscareSoundPlayer()
+                        jumpscareSoundPlayer = prepareMediaFromUri(context, uri, forJumpscareSound = true)
+                        val saved = prefs.getBoolean("saved_jumpscare_is_playing", false)
+                        if (saved) {
+                            jumpscareSoundPlayer?.setOnPreparedListener { p ->
+                                jumpscareSoundDurationMs = try { p.duration } catch (_: Exception) { 0 }
+                                try { p.start(); jumpscareSoundIsPlaying = true } catch (_: Exception) {}
+                            }
+                        }
+                    } catch (_: Exception) { releaseJumpscareSoundPlayer() }
+                } ?: run { releaseJumpscareSoundPlayer() }
+            }
+            else -> {
+                // exhaustive fallback
+                releaseJumpscareSoundPlayer()
+            }
+        }
+    }
+
+    // ---------- UI sizing + layout ----------
+    val configuration = LocalConfiguration.current
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -457,7 +457,6 @@ fun MsgVoicesScreen(navController: NavHostController) {
             val w = maxWidth.value
             val h = maxHeight.value
 
-            // Responsive sizes (auto-resize)
             val titleSize = when {
                 configuration.screenWidthDp < 360 -> 28.sp
                 configuration.screenWidthDp < 420 -> 34.sp
@@ -466,18 +465,18 @@ fun MsgVoicesScreen(navController: NavHostController) {
             }
             val messageFontSize = (w * 0.04f).coerceIn(12f, 20f).sp
             val charCountSize = (w * 0.033f).coerceIn(10f, 14f).sp
-            val topHomeSize = (w * 0.12f).coerceIn(48f, 72f).dp
-            val iconSize = 32.dp            // slightly larger responsive icons
             val playSize = (w * 0.11f).coerceIn(36f, 56f).dp
-            val bottomBarHeight = (h * 0.11f).coerceIn(72f, 120f).dp    // made larger to be more visible
+            val bottomBarHeight = (h * 0.11f).coerceIn(72f, 120f).dp
             val uploadIconSize = (w * 0.16f).coerceIn(48f, 120f).dp
             val uploadHeight = (h * 0.12f).coerceIn(64f, 160f).dp
             val messageBoxHeight = (h * 0.33f).coerceIn(200f, 420f).dp
             val topSpacing = (h * 0.05f).coerceIn(24f, 120f).dp
+            val sectionSpacing = (h * 0.045f).coerceIn(20f, 72f).dp // slightly larger spacing
             val betweenSpacing = (h * 0.02f).coerceIn(8f, 40f).dp
             val cardColor = Color(0xFF2A1E2B)
             val textBoxColor = Color(0xFF241827)
             val saveGradient = Brush.horizontalGradient(listOf(Color(0xFF7B61FF), Color(0xFFFF69B4)))
+            val sectionTitleSize = (w * 0.045f).coerceIn(16f, 22f).sp
 
             Column(
                 modifier = Modifier
@@ -489,7 +488,7 @@ fun MsgVoicesScreen(navController: NavHostController) {
             ) {
                 Spacer(modifier = Modifier.height(topSpacing))
 
-                // Title centered
+                // Screen title
                 Text(
                     text = "Msg & Audios",
                     color = Color(0xFFEFE7F6),
@@ -499,15 +498,12 @@ fun MsgVoicesScreen(navController: NavHostController) {
 
                 Spacer(modifier = Modifier.height(betweenSpacing))
 
-                // Message box
+                // Message input area
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(messageBoxHeight)
-                        .background(
-                            if (jumpscaresOn) Color(0xFF2F2F2F) else textBoxColor,
-                            RoundedCornerShape(20.dp)
-                        )
+                        .background(if (jumpscaresOn) Color(0xFF2F2F2F) else textBoxColor, RoundedCornerShape(20.dp))
                         .padding((w * 0.04f).coerceIn(10f, 20f).dp)
                 ) {
                     Column(modifier = Modifier.fillMaxSize()) {
@@ -519,803 +515,201 @@ fun MsgVoicesScreen(navController: NavHostController) {
                                     Toast.makeText(context, "Disable jumpscares first", Toast.LENGTH_SHORT).show()
                                     return@BasicTextField
                                 }
-                                if (it.length <= 250) {
-                                    message = it
-                                } else {
-                                    // notify on reaching limit and ignore extra characters
-                                    Toast.makeText(context, "Character limit reached", Toast.LENGTH_SHORT).show()
-                                }
+                                if (it.length <= 250) message = it else Toast.makeText(context, "Character limit reached", Toast.LENGTH_SHORT).show()
                             },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .weight(1f)
-                                .verticalScroll(scroll),
+                            modifier = Modifier.fillMaxWidth().weight(1f).verticalScroll(scroll),
                             textStyle = TextStyle(color = Color.White, fontSize = messageFontSize),
                             cursorBrush = SolidColor(Color.White)
                         )
 
                         Spacer(modifier = Modifier.height(8.dp))
 
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            // NEW: Random toggle button
-                            androidx.compose.material3.Button(
+                        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Button(
                                 onClick = {
                                     if (jumpscaresOn) {
                                         Toast.makeText(context, "Disable jumpscares first", Toast.LENGTH_SHORT).show()
                                         return@Button
                                     }
-                                    // toggle mode
                                     randomOn = !randomOn
-                                    // when turned on, set an immediate random sample
                                     if (randomOn) {
                                         val samples = listOf(
                                             "Stay focused — you got this.",
                                             "Remember why you started.",
                                             "One step at a time. Finish the task.",
                                             "Being a loser is hard, getting successful is hard, choose your hard...",
-                                            "You waste so much time on your phone but still complain why you're not happy.",
-                                            "Imagine if you wasted no time on your phone, imagine what car you would drive, imagine what house you would live in, imagine the lifestyle you could live in if you used that time for your goals...",
-                                            "There's no one coming to save you, you're the only one who can help your future and you're the only one who can screw it up.",
-                                            "Imagine where you would be if all that time you wasted on your phone was used towards your goals...",
-                                            "Time is your most valuable asset, use it wisely...",
-                                            "When you're old, you’ll look back at all the time you wasted and wish you’d done something productive...",
-                                            "The heaviest weight you will ever carry is knowing the person you could be, but refusing to do the things to become that person.",
-                                            "Imagine where you would’ve been if you locked in for the past year...",
-                                            "You either suffer the pain of discipline or the pain of regret — one lasts minutes, the other lasts forever.",
-                                            "Every scroll, every hour wasted, is time stolen from your dreams.",
-                                            "You don’t need more time — you need more focus.",
-                                            "Excuses don’t build your future, actions do.",
-                                            "Your comfort zone is where your potential goes to die.",
-                                            "The world doesn’t owe you success — you earn it when no one’s watching.",
-                                            "One year of discipline can change your entire life, but one year of laziness can destroy it.",
-                                            "If you can spend hours watching others live their dream, you can spend a few working on yours.",
-                                            "Discipline is doing what needs to be done, even when you don’t feel like it.",
-                                            "The longer you wait to start, the further your dream gets.",
-                                            "You could be so much more if you just... LOCK IN."
+                                            "You waste so much time on your phone..."
                                         )
                                         message = samples.random()
                                     }
                                 },
-                                // animated scale + dynamic background color
-                                modifier = Modifier
-                                    .scale(randomScale),
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = if (randomOn) Color(0xFF20B2AA) else Color(0xFF3C2B3E)
-
-                                ),
+                                modifier = Modifier.scale(randomScale),
+                                colors = ButtonDefaults.buttonColors(containerColor = if (randomOn) Color(0xFF20B2AA) else Color(0xFF3C2B3E)),
                                 shape = RoundedCornerShape(8.dp)
                             ) {
-                                // ALWAYS show the label "Random"
-                                Text(
-                                    text = if (randomOn) "Random (On)" else "Random",
-                                    color = Color.White,
-                                    fontSize = 14.sp
-                                )
+                                Text(text = if (randomOn) "Random (On)" else "Random", color = Color.White, fontSize = 14.sp)
                             }
 
                             Spacer(modifier = Modifier.width(8.dp))
 
-                            androidx.compose.material3.Button(
-                                onClick = {
-                                    if (jumpscaresOn) {
-                                        Toast.makeText(context, "Disable jumpscares first", Toast.LENGTH_SHORT).show()
-                                        return@Button
-                                    }
-                                    message = ""
-                                },
-                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF3C2B3E)),
-                                shape = RoundedCornerShape(8.dp)
-                            ) {
+                            Button(onClick = { if (!jumpscaresOn) message = "" else Toast.makeText(context, "Disable jumpscares first", Toast.LENGTH_SHORT).show() },
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF3C2B3E)), shape = RoundedCornerShape(8.dp)) {
                                 Text("Clear", color = Color.White, fontSize = charCountSize)
                             }
 
                             Spacer(modifier = Modifier.weight(1f))
-
                             Text("${message.length}/250", color = Color(0xFFB6A9C1), fontSize = charCountSize)
                         }
                     }
                 }
 
-                Spacer(modifier = Modifier.height(betweenSpacing))
+                Spacer(modifier = Modifier.height(sectionSpacing))
 
-                // Upload + Sound card
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(cardColor, RoundedCornerShape(18.dp))
-                        .padding(16.dp)
-                ) {
-                    Column {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.Top
-                        ) {
-                            // Sound column (Text + Switch)
-                            Column(
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                modifier = Modifier.width((w * 0.28f).coerceIn(80f, 140f).dp)
-                            ) {
-                                // Row: Sound label and Switch on the right
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text(
-                                        "Sound",
-                                        color = Color(0xFFDCD0E7),
-                                        fontWeight = FontWeight.SemiBold,
-                                        fontSize = (w * 0.045f).coerceIn(14f, 22f).sp
-                                    )
-
-                                    Spacer(modifier = Modifier.weight(1f))
-
-                                    // Switch to enable/disable sound (right of the word)
-                                    Switch(
-                                        checked = isSoundOn,
-                                        onCheckedChange = { checked ->
-                                            if (jumpscaresOn) {
-                                                Toast.makeText(context, "Disable jumpscares first", Toast.LENGTH_SHORT).show()
-                                                return@Switch
-                                            }
-                                            isSoundOn = checked
-                                            if (!isSoundOn) {
-                                                try { mediaPlayer?.pause() } catch (_: Exception) {}
-                                                isPlaying = false
-                                            }
-                                        },
-                                        colors = SwitchDefaults.colors(
-                                            checkedThumbColor = Color.White,
-                                            checkedTrackColor = Color(0xFF20C997),
-                                            uncheckedThumbColor = Color.White,
-                                            uncheckedTrackColor = Color(0xFF7A7A7A)
-                                        )
-                                    )
-                                }
-
-                                Spacer(modifier = Modifier.height(6.dp))
-
-                                // Removed the large image toggle under switch to avoid duplication
-                                Spacer(modifier = Modifier.height(6.dp))
-                            }
-
-                            Spacer(modifier = Modifier.width(16.dp))
-
-                            // Upload column
-                            Column(
-                                modifier = Modifier.weight(1f),
-                                horizontalAlignment = Alignment.CenterHorizontally
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(uploadHeight)
-                                        .background(
-                                            if (jumpscaresOn) Color(0xFF2F2F2F) else Color(0xFF3C2B3E),
-                                            RoundedCornerShape(14.dp)
-                                        )
-                                        .clickable(interactionSource = noRipple, indication = null) {
-                                            if (jumpscaresOn) {
-                                                Toast.makeText(context, "Disable jumpscares first", Toast.LENGTH_SHORT).show()
-                                                return@clickable
-                                            }
-                                            showPermissionDialog = true
-                                        },
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Image(
-                                        painter = painterResource(id = R.drawable.upload),
-                                        contentDescription = null,
-                                        modifier = Modifier.size(uploadIconSize),
-                                        contentScale = ContentScale.Fit
-                                    )
-                                }
-
-                                Spacer(modifier = Modifier.height(6.dp))
-                                Text("Upload", color = Color(0xFFEFE7F6))
-                                Text("(mp4 file)", color = Color(0xFFB6A9C1), fontSize = 12.sp)
-
-                                if (selectedFileUri != null) {
-                                    Spacer(modifier = Modifier.height(10.dp))
-
-                                    Box(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .background(Color(0xFF372933), RoundedCornerShape(10.dp))
-                                            .padding(10.dp)
-                                    ) {
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            modifier = Modifier.fillMaxWidth()
-                                        ) {
-                                            Text(
-                                                text = selectedFileName ?: selectedFileUri?.lastPathSegment ?: "Selected file",
-                                                color = Color(0xFFEFE7F6),
-                                                maxLines = 1,
-                                                overflow = TextOverflow.Ellipsis,
-                                                modifier = Modifier.weight(1f)
-                                            )
-
-                                            Spacer(modifier = Modifier.width(8.dp))
-
-                                            Image(
-                                                painter = painterResource(id = if (isPlaying) R.drawable.play else R.drawable.pause),
-                                                contentDescription = if (isPlaying) "Pause" else "Play",
-                                                modifier = Modifier
-                                                    .size(playSize)
-                                                    .clickable(interactionSource = noRipple, indication = null) {
-                                                        if (jumpscaresOn) {
-                                                            Toast.makeText(context, "Disable jumpscares first", Toast.LENGTH_SHORT).show()
-                                                            return@clickable
-                                                        }
-                                                        mediaPlayer?.let { mp ->
-                                                            try {
-                                                                if (mp.isPlaying) {
-                                                                    mp.pause(); isPlaying = false
-                                                                } else {
-                                                                    mp.start(); isPlaying = true
-                                                                }
-                                                            } catch (e: Exception) {
-                                                                Toast.makeText(context, "Can't play: ${e.message}", Toast.LENGTH_SHORT).show()
-                                                            }
-                                                        }
-                                                    },
-                                                contentScale = ContentScale.Fit
-                                            )
-                                        }
-                                    }
-
-                                    Spacer(modifier = Modifier.height(8.dp))
-
-                                    val progress = if (durationMs > 0) (currentPositionMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f) else 0f
-                                    Slider(
-                                        value = if (isSeeking) seekPercent else progress,
-                                        onValueChange = { value: Float ->
-                                            if (jumpscaresOn) {
-                                                Toast.makeText(context, "Disable jumpscares first", Toast.LENGTH_SHORT).show()
-                                                return@Slider
-                                            }
-                                            seekPercent = value
-                                            isSeeking = true
-                                        },
-                                        onValueChangeFinished = {
-                                            if (jumpscaresOn) {
-                                                seekPercent = 0f
-                                                return@Slider
-                                            }
-                                            isSeeking = false
-                                            val targetMs = ((seekPercent.coerceIn(0f,1f)) * (durationMs.coerceAtLeast(1))).toInt()
-                                            try {
-                                                mediaPlayer?.seekTo(targetMs)
-                                                currentPositionMs = targetMs
-                                                if (isSoundOn && (mediaPlayer != null) && isPlaying) {
-                                                    try { mediaPlayer?.start(); isPlaying = true } catch (_: Exception) {}
-                                                }
-                                            } catch (e: Exception) {
-                                                Toast.makeText(context, "Seek failed: ${e.message}", Toast.LENGTH_SHORT).show()
-                                            }
-                                        },
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .height(28.dp),
-                                        enabled = isSoundOn && (durationMs > 0),
-                                        colors = SliderDefaults.colors(
-                                            thumbColor = if (isSoundOn) Color.White else Color(0xFF7A7A7A),
-                                            activeTrackColor = if (isSoundOn) Color.White else Color(0xFF7A7A7A),
-                                            inactiveTrackColor = Color(0x66FFFFFF)
-                                        )
-                                    )
-                                }
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.height(10.dp))
-
-                        // (Removed Save Box from inside Upload card per request)
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(betweenSpacing))
-
-                // ---- Jumpscares Title + Switch (above the jumpscares card) ----
+                // --------------------
+                // SOUND LABEL + SWITCH
+                // (on the same row, above the upload / sound controls)
+                // --------------------
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = "Jumpscares (Experimental)", // renamed
-                        color = Color(0xFFEFE7F6),
-                        fontSize = (w * 0.045f).coerceIn(16f, 22f).sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
-
+                    Text(text = "Sound", color = Color(0xFFEFE7F6), fontSize = sectionTitleSize, fontWeight = FontWeight.SemiBold)
                     Spacer(modifier = Modifier.weight(1f))
-
-                    // Jumpscare Switch: green track when enabled, white thumb
                     Switch(
-                        checked = jumpscaresOn,
-                        onCheckedChange = { enabled ->
-                            jumpscaresOn = enabled
-                            if (enabled) {
-                                // force sound off (handled by LaunchedEffect), stop media
-                                isSoundOn = false
+                        checked = isSoundOn,
+                        onCheckedChange = { checked ->
+                            isSoundOn = checked
+                            prefs.edit().putBoolean("saved_sound_on", isSoundOn).apply()
+                            if (checked && jumpscaresOn) {
+                                // disable jumpscares when enabling sound
+                                jumpscaresOn = false
+                                releaseJumpscareSoundPlayer()
+                                prefs.edit().putBoolean("saved_jumpscares_on", false).apply()
+                            }
+                            if (!checked) {
                                 try { mediaPlayer?.pause() } catch (_: Exception) {}
                                 isPlaying = false
-                            } else {
-                                // when disabled, also pause jumpscare sound preview
-                                try { jumpscareSoundPlayer?.pause() } catch (_: Exception) {}
-                                jumpscareSoundIsPlaying = false
+                                prefs.edit().putBoolean("saved_is_playing", false).apply()
                             }
                         },
                         colors = SwitchDefaults.colors(
-                            checkedThumbColor = Color.White,
-                            checkedTrackColor = Color(0xFF20C997),
-                            uncheckedThumbColor = Color.White,
-                            uncheckedTrackColor = Color(0xFF7A7A7A)
+                            checkedThumbColor = Color.White, checkedTrackColor = Color(0xFF20C997),
+                            uncheckedThumbColor = Color.White, uncheckedTrackColor = Color(0xFF7A7A7A)
                         )
                     )
                 }
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                // ---- Jumpscares card (3 options + preview on right) ----
+                // --------------------
+                // UPLOAD / MAIN SOUND CARD
+                // (sound controls live inside this card)
+                // --------------------
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
                         .background(cardColor, RoundedCornerShape(18.dp))
-                        .padding(12.dp)
+                        .padding(16.dp)
                 ) {
-                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        // Left column: three circular selectors and icons (NO TEXT labels here)
-                        Column(
-                            modifier = Modifier.width((w * 0.32f).coerceIn(120f, 220f).dp),
-                            verticalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            // helper to draw one selector row (image only - no name)
-                            @Composable
-                            fun selectorIcon(index: Int, drawableRes: Int? = null) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clickable {
-                                            if (jumpscaresOn.not()) {
-                                                jumpscareSelectedIndex = index
-                                                if (index == 2 && jumpscareCustomUri == null) {
-                                                    // open image picker for custom
-                                                    openImageLauncher.launch(arrayOf("image/*"))
-                                                }
-                                            } else {
-                                                Toast.makeText(context, "Disable jumpscares first", Toast.LENGTH_SHORT).show()
-                                            }
-                                        }
-                                        .padding(4.dp)
-                                ) {
-                                    // small circle selection indicator
-                                    Box(
-                                        modifier = Modifier
-                                            .size(22.dp)
-                                            .background(
-                                                if (jumpscareSelectedIndex == index) Color.White else Color.Transparent,
-                                                shape = CircleShape
-                                            )
-                                            .border(
-                                                width = 2.dp,
-                                                color = Color.White,
-                                                shape = CircleShape
-                                            ),
-                                    )
-
-                                    Spacer(modifier = Modifier.width(10.dp))
-
-                                    if (drawableRes != null) {
-                                        Image(
-                                            painter = painterResource(id = drawableRes),
-                                            contentDescription = null,
-                                            modifier = Modifier.size(34.dp),
-                                            contentScale = ContentScale.Fit
-                                        )
-                                    } else {
-                                        // placeholder circle if no drawable specified
-                                        Box(
-                                            modifier = Modifier
-                                                .size(34.dp)
-                                                .background(Color(0xFF3C2B3E), shape = RoundedCornerShape(6.dp)),
-                                            contentAlignment = Alignment.Center
-                                        ) {
-                                            Text("?", color = Color.White, fontSize = 12.sp)
-                                        }
-                                    }
-                                }
-                            }
-
-                            // burger (icon only, no name)
-                            selectorIcon(0, R.drawable.burger)
-
-                            // job app (icon only)
-                            selectorIcon(1, R.drawable.jobapp)
-
-                            // custom (icon only)
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(4.dp)
-                                    .clickable {
-                                        if (jumpscaresOn) {
-                                            Toast.makeText(context, "Disable jumpscares first", Toast.LENGTH_SHORT).show()
-                                            return@clickable
-                                        }
-                                        jumpscareSelectedIndex = 2
-                                        // open picker immediately for custom
-                                        openSoundLauncher.launch(arrayOf("audio/mpeg", "video/mp4"))
-
-                                    }
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(22.dp)
-                                        .background(
-                                            if (jumpscareSelectedIndex == 2) Color.White else Color.Transparent,
-                                            shape = CircleShape
-                                        )
-                                        .border(
-                                            width = 2.dp,
-                                            color = Color.White,
-                                            shape = CircleShape
-                                        ),
-                                )
-
-                                Spacer(modifier = Modifier.width(10.dp))
-
-                                // small preview icon / placeholder for custom selector
-                                if (jumpscareCustomBitmap != null) {
-                                    Image(
-                                        bitmap = jumpscareCustomBitmap!!,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(34.dp),
-                                        contentScale = ContentScale.Crop
-                                    )
-                                } else {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(34.dp)
-                                            .background(Color(0xFF3C2B3E), shape = RoundedCornerShape(6.dp)),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Text("C", color = Color.White, fontSize = 12.sp)
-                                    }
-                                }
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.width(12.dp))
-
-                        // Right: preview rectangle (transparent background, NO border) and name under the image
-                        Column(
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        // upload area (tappable)
+                        Box(
                             modifier = Modifier
-                                .weight(1f)
-                                .height((h * 0.28f).coerceIn(120f, 260f).dp),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.Center
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .weight(1f)
-                                    .background(Color.Transparent, RoundedCornerShape(6.dp)),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                // Show selected image (fit inside box). No purple background; no border.
-                                when (jumpscareSelectedIndex) {
-                                    0 -> {
-                                        Image(
-                                            painter = painterResource(id = R.drawable.burger),
-                                            contentDescription = "burger preview",
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .padding(8.dp),
-                                            contentScale = ContentScale.Fit
-                                        )
-                                    }
-                                    1 -> {
-                                        Image(
-                                            painter = painterResource(id = R.drawable.jobapp),
-                                            contentDescription = "jobapp preview",
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .padding(8.dp),
-                                            contentScale = ContentScale.Fit
-                                        )
-                                    }
-                                    2 -> {
-                                        if (jumpscareCustomBitmap != null) {
-                                            Image(
-                                                bitmap = jumpscareCustomBitmap!!,
-                                                contentDescription = "custom preview",
-                                                modifier = Modifier
-                                                    .fillMaxWidth()
-                                                    .padding(8.dp),
-                                                contentScale = ContentScale.Fit
-                                            )
-                                        } else {
-                                            Text("No custom image\nselected", color = Color.White)
-                                        }
-                                    }
-                                }
-                            }
-
-                            Spacer(modifier = Modifier.height(8.dp))
-
-                            // Name under the image (mapping index -> desired displayed name)
-                            val displayedName = when (jumpscareSelectedIndex) {
-                                0 -> "Burger"
-                                1 -> "Job Application" // explicitly called "Job Application"
-                                2 -> {
-                                    jumpscareCustomUri?.let { resolveDisplayName(it) } ?: "Custom"
-                                }
-                                else -> ""
-                            }
-                            Text(displayedName, color = Color(0xFFEFE7F6), fontWeight = FontWeight.SemiBold)
-                        }
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(betweenSpacing))
-
-                // ------------- JUMPSCARE SOUNDS CARD -------------
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(cardColor, RoundedCornerShape(18.dp))
-                        .padding(12.dp)
-                ) {
-                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        // Left small selectors
-                        Column(
-                            modifier = Modifier.width((w * 0.32f).coerceIn(120f, 220f).dp),
-                            verticalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            // helper for sound selector rows
-                            @Composable
-                            fun soundSelector(index: Int, label: String, drawableRes: Int? = null) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clickable {
-                                            if (!jumpscaresOn) {
-                                                Toast.makeText(context, "Enable jumpscares to change sounds", Toast.LENGTH_SHORT).show()
-                                                return@clickable
-                                            }
-                                            // select index and prepare bundled players for 0/1
-                                            jumpscareSoundSelectedIndex = index
-                                            when (index) {
-                                                0 -> {
-                                                    releaseJumpscareSoundPlayer()
-                                                    jumpscareSoundPlayer = prepareMediaFromRes(R.raw.scream1)
-                                                    jumpscareSoundName = "Scream 1"
-                                                    // set duration if available
-                                                    jumpscareSoundPlayer?.let { jumpscareSoundDurationMs = try { it.duration } catch (_: Exception) { 0 } }
-                                                }
-                                                1 -> {
-                                                    releaseJumpscareSoundPlayer()
-                                                    jumpscareSoundPlayer = prepareMediaFromRes(R.raw.scream2)
-                                                    jumpscareSoundName = "Scream 2"
-                                                    jumpscareSoundPlayer?.let { jumpscareSoundDurationMs = try { it.duration } catch (_: Exception) { 0 } }
-                                                }
-                                            }
-                                        }
-                                        .padding(4.dp)
-                                ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(22.dp)
-                                            .background(if (jumpscareSoundSelectedIndex == index) Color.White else Color.Transparent, shape = CircleShape)
-                                            .border(width = 2.dp, color = Color.White, shape = CircleShape)
-                                    )
-
-                                    Spacer(modifier = Modifier.width(10.dp))
-
-                                    if (drawableRes != null) {
-                                        Image(
-                                            painter = painterResource(id = drawableRes),
-                                            contentDescription = null,
-                                            modifier = Modifier.size(34.dp),
-                                            contentScale = ContentScale.Fit
-                                        )
+                                .fillMaxWidth()
+                                .height(uploadHeight)
+                                .background(if (jumpscaresOn) Color(0xFF2F2F2F) else Color(0xFF3C2B3E), RoundedCornerShape(14.dp))
+                                .clickable(interactionSource = noRipple, indication = null) {
+                                    if (!isSoundOn) {
+                                        // Even if jumpscares are off, we allow upload only when Sound is ON (you can choose different UX)
+                                        showPermissionDialog = true
                                     } else {
-                                        Box(
-                                            modifier = Modifier
-                                                .size(34.dp)
-                                                .background(Color(0xFF3C2B3E), shape = RoundedCornerShape(6.dp)),
-                                            contentAlignment = Alignment.Center
-                                        ) {
-                                            Text(label.take(1), color = Color.White, fontSize = 12.sp)
-                                        }
+                                        showPermissionDialog = true
                                     }
+                                },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Image(painter = painterResource(id = R.drawable.upload), contentDescription = null, modifier = Modifier.size(uploadIconSize), contentScale = ContentScale.Fit)
+                        }
+
+                        Text("Upload", color = Color(0xFFEFE7F6), modifier = Modifier.padding(top = 8.dp))
+                        Text("(mp4 file)", color = Color(0xFFB6A9C1), fontSize = 12.sp)
+
+                        // If a file is selected, show filename + play/pause + slider
+                        selectedFileUri?.let {
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Box(modifier = Modifier.fillMaxWidth().background(Color(0xFF372933), RoundedCornerShape(10.dp)).padding(10.dp)) {
+                                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                                    Text(text = selectedFileName ?: it.lastPathSegment ?: "Selected file", color = Color(0xFFEFE7F6),
+                                        maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
 
                                     Spacer(modifier = Modifier.width(8.dp))
-                                    Text(label, color = Color(0xFFEFE7F6))
+
+                                    // Play/Pause button for main media (same look as jumpscare)
+                                    Image(
+                                        painter = painterResource(id = if (isPlaying) R.drawable.pause else R.drawable.play),
+                                        contentDescription = if (isPlaying) "Pause" else "Play",
+                                        modifier = Modifier
+                                            .size(playSize)
+                                            .clickable(interactionSource = noRipple, indication = null) {
+                                                if (!isSoundOn) {
+                                                    Toast.makeText(context, "Enable sound to play", Toast.LENGTH_SHORT).show()
+                                                    return@clickable
+                                                }
+                                                mediaPlayer?.let { mp ->
+                                                    try {
+                                                        if (mp.isPlaying) {
+                                                            mp.pause(); isPlaying = false
+                                                            prefs.edit().putBoolean("saved_is_playing", false).apply()
+                                                        } else {
+                                                            mp.start(); isPlaying = true
+                                                            prefs.edit().putBoolean("saved_is_playing", true).apply()
+                                                        }
+                                                    } catch (e: Exception) {
+                                                        Toast.makeText(context, "Can't play: ${e.message}", Toast.LENGTH_SHORT).show()
+                                                    }
+                                                } ?: run {
+                                                    // try to prepare and start
+                                                    selectedFileUri?.let { u ->
+                                                        prepareMediaFromUri(context, u, forJumpscareSound = false)?.let { mp2 ->
+                                                            mediaPlayer?.release()
+                                                            mediaPlayer = mp2
+                                                            try { mp2.start(); isPlaying = true; prefs.edit().putBoolean("saved_is_playing", true).apply() } catch (_: Exception) {}
+                                                        }
+                                                    }
+                                                }
+                                            },
+                                        contentScale = ContentScale.Fit
+                                    )
                                 }
                             }
-
-                            soundSelector(0, "Scream 1", R.drawable.burger)
-                            soundSelector(1, "Scream 2", R.drawable.jobapp)
-
-                            // Custom sound selector + choose button
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(4.dp)
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(22.dp)
-                                        .background(if (jumpscareSoundSelectedIndex == 2) Color.White else Color.Transparent, shape = CircleShape)
-                                        .border(width = 2.dp, color = Color.White, shape = CircleShape)
-                                )
-
-                                Spacer(modifier = Modifier.width(10.dp))
-
-                                Box(
-                                    modifier = Modifier
-                                        .size(34.dp)
-                                        .background(Color(0xFF3C2B3E), shape = RoundedCornerShape(6.dp)),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Text("C", color = Color.White, fontSize = 12.sp)
-                                }
-
-                                Spacer(modifier = Modifier.width(8.dp))
-
-                                Column {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Text("Custom", color = Color(0xFFEFE7F6))
-                                        Spacer(modifier = Modifier.width(8.dp))
-                                        TextButton(onClick = {
-                                            if (!jumpscaresOn) {
-                                                Toast.makeText(context, "Enable jumpscares to choose a custom sound", Toast.LENGTH_SHORT).show()
-                                                return@TextButton
-                                            }
-                                            showSoundPermissionDialog = true
-                                        }) {
-                                            Text("Choose", color = Color(0xFFB6A9C1))
-                                        }
-                                    }
-
-                                    // small label for chosen custom sound
-                                    jumpscareSoundName?.let { name ->
-                                        if (jumpscareSoundSelectedIndex == 2) {
-                                            Text(name, color = Color(0xFFB6A9C1), maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 12.sp)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.width(12.dp))
-
-                        // Right: preview + controls
-                        Column(
-                            modifier = Modifier
-                                .weight(1f)
-                                .height((h * 0.22f).coerceIn(100f, 180f).dp),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.Center
-                        ) {
-                            val previewName = when (jumpscareSoundSelectedIndex) {
-                                0 -> "Scream 1"
-                                1 -> "Scream 2"
-                                2 -> jumpscareSoundName ?: "Custom"
-                                else -> ""
-                            }
-
-                            Text(previewName, color = Color(0xFFEFE7F6), fontSize = (w * 0.055f).coerceIn(16f, 26f).sp, fontWeight = FontWeight.Bold)
 
                             Spacer(modifier = Modifier.height(8.dp))
 
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                // Play / Pause preview
-                                Image(
-                                    painter = painterResource(id = if (jumpscareSoundIsPlaying) R.drawable.play else R.drawable.pause),
-                                    contentDescription = if (jumpscareSoundIsPlaying) "Pause preview" else "Play preview",
-                                    modifier = Modifier
-                                        .size(36.dp)
-                                        .clickable(interactionSource = noRipple, indication = null) {
-                                            if (!jumpscaresOn) {
-                                                Toast.makeText(context, "Enable jumpscares to preview sounds", Toast.LENGTH_SHORT).show()
-                                                return@clickable
-                                            }
-
-                                            // if player exists toggle, otherwise prepare appropriate player
-                                            jumpscareSoundPlayer?.let { mp ->
-                                                try {
-                                                    if (mp.isPlaying) {
-                                                        mp.pause(); jumpscareSoundIsPlaying = false
-                                                    } else {
-                                                        mp.start(); jumpscareSoundIsPlaying = true
-                                                    }
-                                                } catch (e: Exception) {
-                                                    Toast.makeText(context, "Playback error: ${e.message}", Toast.LENGTH_SHORT).show()
-                                                }
-                                            } ?: run {
-                                                // prepare based on selected index
-                                                when (jumpscareSoundSelectedIndex) {
-                                                    0 -> {
-                                                        releaseJumpscareSoundPlayer()
-                                                        jumpscareSoundPlayer = prepareMediaFromRes(R.raw.scream1)
-                                                        jumpscareSoundName = "Scream 1"
-                                                        jumpscareSoundPlayer?.let { jumpscareSoundDurationMs = try { it.duration } catch (_: Exception) { 0 } }
-                                                        jumpscareSoundPlayer?.start(); jumpscareSoundIsPlaying = true
-                                                    }
-                                                    1 -> {
-                                                        releaseJumpscareSoundPlayer()
-                                                        jumpscareSoundPlayer = prepareMediaFromRes(R.raw.scream2)
-                                                        jumpscareSoundName = "Scream 2"
-                                                        jumpscareSoundPlayer?.let { jumpscareSoundDurationMs = try { it.duration } catch (_: Exception) { 0 } }
-                                                        jumpscareSoundPlayer?.start(); jumpscareSoundIsPlaying = true
-                                                    }
-                                                    2 -> {
-                                                        jumpscareSoundCustomUri?.let { uri ->
-                                                            prepareMediaFromUri(context, uri)?.let { mp ->
-                                                                releaseJumpscareSoundPlayer()
-                                                                jumpscareSoundPlayer = mp
-                                                                mp.setOnPreparedListener { p ->
-                                                                    jumpscareSoundDurationMs = try { p.duration } catch (_: Exception) { 0 }
-                                                                    mp.start(); jumpscareSoundIsPlaying = true
-                                                                }
-                                                                mp.setOnCompletionListener {
-                                                                    try { it.seekTo(0) } catch (_: Exception) {}
-                                                                    jumpscareSoundIsPlaying = false
-                                                                }
-                                                            } ?: Toast.makeText(context, "Can't prepare custom sound", Toast.LENGTH_SHORT).show()
-                                                        } ?: Toast.makeText(context, "Choose a custom sound first", Toast.LENGTH_SHORT).show()
-                                                    }
-                                                }
-                                            }
-                                        },
-                                    contentScale = ContentScale.Fit
-                                )
-                            }
-
-                            Spacer(modifier = Modifier.height(6.dp))
-
-                            val jsProgress = if (jumpscareSoundDurationMs > 0) (jumpscareSoundCurrentMs.toFloat() / jumpscareSoundDurationMs.toFloat()).coerceIn(0f, 1f) else 0f
-
+                            val progress = if (durationMs > 0) (currentPositionMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f) else 0f
                             Slider(
-                                value = if (jumpscareSoundIsSeeking) jumpscareSoundSeekPercent else jsProgress,
+                                value = if (isSeeking) seekPercent else progress,
                                 onValueChange = { value ->
-                                    if (!jumpscaresOn) {
-                                        Toast.makeText(context, "Enable jumpscares to interact", Toast.LENGTH_SHORT).show()
-                                        return@Slider
-                                    }
-                                    jumpscareSoundSeekPercent = value
-                                    jumpscareSoundIsSeeking = true
+                                    seekPercent = value
+                                    isSeeking = true
                                 },
                                 onValueChangeFinished = {
-                                    jumpscareSoundIsSeeking = false
-                                    val targetMs = ((jumpscareSoundSeekPercent.coerceIn(0f,1f)) * (jumpscareSoundDurationMs.coerceAtLeast(1))).toInt()
+                                    isSeeking = false
+                                    val targetMs = ((seekPercent.coerceIn(0f, 1f)) * (durationMs.coerceAtLeast(1))).toInt()
                                     try {
-                                        jumpscareSoundPlayer?.seekTo(targetMs)
-                                        jumpscareSoundCurrentMs = targetMs
-                                        if (jumpscareSoundIsPlaying) {
-                                            try { jumpscareSoundPlayer?.start(); jumpscareSoundIsPlaying = true } catch (_: Exception) {}
-                                        }
+                                        mediaPlayer?.seekTo(targetMs)
+                                        currentPositionMs = targetMs
+                                        if (isPlaying) { try { mediaPlayer?.start(); isPlaying = true } catch (_: Exception) {} }
                                     } catch (e: Exception) {
                                         Toast.makeText(context, "Seek failed: ${e.message}", Toast.LENGTH_SHORT).show()
                                     }
                                 },
                                 modifier = Modifier.fillMaxWidth().height(28.dp),
-                                enabled = jumpscareSoundDurationMs > 0,
+                                enabled = isSoundOn && (durationMs > 0),
                                 colors = SliderDefaults.colors(
-                                    thumbColor = Color.White,
-                                    activeTrackColor = Color.White,
+                                    thumbColor = if (isSoundOn) Color.White else Color(0xFF7A7A7A),
+                                    activeTrackColor = if (isSoundOn) Color.White else Color(0xFF7A7A7A),
                                     inactiveTrackColor = Color(0x66FFFFFF)
                                 )
                             )
@@ -1323,189 +717,307 @@ fun MsgVoicesScreen(navController: NavHostController) {
                     }
                 }
 
-                Spacer(modifier = Modifier.height(betweenSpacing * 2))
+                Spacer(modifier = Modifier.height(sectionSpacing))
 
-                // ---- SAVE BUTTON placed at the very bottom of the PAGE (end of the scrollable Column) ----
-                Spacer(modifier = Modifier.height(12.dp))
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 16.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(56.dp)
-                            .background(saveGradient, RoundedCornerShape(14.dp))
-                            .clickable(interactionSource = noRipple, indication = null) {
-                                // Save all relevant states to SharedPreferences (including jumpscare sound)
-                                val prefs = context.getSharedPreferences("obstrue_prefs", android.content.Context.MODE_PRIVATE)
-                                prefs.edit().putString("saved_message", message).apply()
-                                prefs.edit().putBoolean("saved_random_on", randomOn).apply()
-                                prefs.edit().putBoolean("saved_sound_on", isSoundOn).apply()
-                                prefs.edit().putBoolean("saved_jumpscares_on", jumpscaresOn).apply()
+                // --------------------
+                // JUMPSCARES LABEL + SWITCH (same row)
+                // --------------------
+                Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(text = "Jumpscares (Experimental)", color = Color(0xFFEFE7F6), fontSize = sectionTitleSize, fontWeight = FontWeight.SemiBold)
+                    Spacer(modifier = Modifier.weight(1f))
+                    Switch(
+                        checked = jumpscaresOn,
+                        onCheckedChange = { enabled ->
+                            jumpscaresOn = enabled
+                            prefs.edit().putBoolean("saved_jumpscares_on", jumpscaresOn).apply()
+                            if (enabled && isSoundOn) {
+                                // disabling sound when jumpscares enabled
+                                isSoundOn = false
+                                try { mediaPlayer?.pause() } catch (_: Exception) {}
+                                isPlaying = false
+                                prefs.edit().putBoolean("saved_sound_on", false).apply()
+                            }
+                            if (!enabled) {
+                                releaseJumpscareSoundPlayer()
+                                prefs.edit().putBoolean("saved_jumpscare_is_playing", false).apply()
+                            }
+                        },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Color.White, checkedTrackColor = Color(0xFF20C997),
+                            uncheckedThumbColor = Color.White, uncheckedTrackColor = Color(0xFF7A7A7A)
+                        )
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // --------------------
+                // Jumpscare image selector card
+                // --------------------
+                Box(modifier = Modifier.fillMaxWidth().background(cardColor, RoundedCornerShape(18.dp)).padding(12.dp)) {
+                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Column(modifier = Modifier.width((w * 0.32f).coerceIn(120f, 220f).dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            @Composable
+                            fun selectorIcon(index: Int, drawableRes: Int? = null) {
+                                Row(verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.fillMaxWidth().clickable {
+                                        if (jumpscaresOn) {
+                                            jumpscareSelectedIndex = index
+                                            prefs.edit().putInt("saved_jumpscare_index", jumpscareSelectedIndex).apply()
+                                            if (index == 2 && jumpscareCustomUri == null) openImageLauncher.launch(arrayOf("image/*"))
+                                        } else {
+                                            Toast.makeText(context, "Enable jumpscares to change images", Toast.LENGTH_SHORT).show()
+                                        }
+                                    }.padding(4.dp)
+                                ) {
+                                    Box(modifier = Modifier.size(22.dp).background(if (jumpscareSelectedIndex == index) Color.White else Color.Transparent, shape = CircleShape)
+                                        .border(width = 2.dp, color = Color.White, shape = CircleShape))
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    if (drawableRes != null) Image(painter = painterResource(id = drawableRes), contentDescription = null, modifier = Modifier.size(34.dp), contentScale = ContentScale.Fit)
+                                    else Box(modifier = Modifier.size(34.dp).background(Color(0xFF3C2B3E), shape = RoundedCornerShape(6.dp)), contentAlignment = Alignment.Center) { Text("?", color = Color.White, fontSize = 12.sp) }
+                                }
+                            }
+
+                            selectorIcon(0, R.drawable.burger)
+                            selectorIcon(1, R.drawable.jobapp)
+
+                            // custom image selector
+                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(4.dp).clickable {
+                                if (!jumpscaresOn) { Toast.makeText(context, "Enable jumpscares to change images", Toast.LENGTH_SHORT).show(); return@clickable }
+                                jumpscareSelectedIndex = 2
                                 prefs.edit().putInt("saved_jumpscare_index", jumpscareSelectedIndex).apply()
-                                prefs.edit().putInt("saved_jumpscare_sound_index", jumpscareSoundSelectedIndex).apply()
+                                openImageLauncher.launch(arrayOf("image/*"))
+                            }) {
+                                Box(modifier = Modifier.size(22.dp).background(if (jumpscareSelectedIndex == 2) Color.White else Color.Transparent, shape = CircleShape)
+                                    .border(width = 2.dp, color = Color.White, shape = CircleShape))
+                                Spacer(modifier = Modifier.width(10.dp))
+                                if (jumpscareCustomBitmap != null) Image(bitmap = jumpscareCustomBitmap!!, contentDescription = null, modifier = Modifier.size(34.dp), contentScale = ContentScale.Crop)
+                                else Box(modifier = Modifier.size(34.dp).background(Color(0xFF3C2B3E), shape = RoundedCornerShape(6.dp)), contentAlignment = Alignment.Center) { Text("C", color = Color.White, fontSize = 12.sp) }
+                            }
+                        }
 
-                                selectedFileUri?.let { uri ->
-                                    prefs.edit().putString("saved_video_uri", uri.toString()).apply()
-                                    prefs.edit().putString("saved_video_name", selectedFileName).apply()
+                        Spacer(modifier = Modifier.width(12.dp))
+
+                        Column(modifier = Modifier.weight(1f).height((h * 0.28f).coerceIn(120f, 260f).dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+                            Box(modifier = Modifier.fillMaxWidth().weight(1f).background(Color.Transparent, RoundedCornerShape(6.dp)), contentAlignment = Alignment.Center) {
+                                when (jumpscareSelectedIndex) {
+                                    0 -> Image(painter = painterResource(id = R.drawable.burger), contentDescription = "burger preview", modifier = Modifier.fillMaxWidth().padding(8.dp), contentScale = ContentScale.Fit)
+                                    1 -> Image(painter = painterResource(id = R.drawable.jobapp), contentDescription = "jobapp preview", modifier = Modifier.fillMaxWidth().padding(8.dp), contentScale = ContentScale.Fit)
+                                    2 -> if (jumpscareCustomBitmap != null) Image(bitmap = jumpscareCustomBitmap!!, contentDescription = "custom preview", modifier = Modifier.fillMaxWidth().padding(8.dp), contentScale = ContentScale.Fit) else Text("No custom image\nselected", color = Color.White)
+                                    else -> Text("", color = Color.Transparent) // exhaustive fallback
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(8.dp))
+
+                            val displayedName = when (jumpscareSelectedIndex) {
+                                0 -> "Burger"
+                                1 -> "Job Application"
+                                2 -> jumpscareCustomUri?.let { resolveDisplayName(it) } ?: "Custom"
+                                else -> ""
+                            }
+                            Text(displayedName, color = Color(0xFFEFE7F6), fontWeight = FontWeight.SemiBold)
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(sectionSpacing))
+
+                // --------------------
+                // Jumpscare sounds card (preview + interactive slider)
+                // --------------------
+                Box(modifier = Modifier.fillMaxWidth().background(cardColor, RoundedCornerShape(18.dp)).padding(12.dp)) {
+                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Column(modifier = Modifier.width((w * 0.32f).coerceIn(120f, 220f).dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            @Composable
+                            fun soundSelector(index: Int, label: String) {
+                                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().clickable {
+                                    if (!jumpscaresOn) { Toast.makeText(context, "Enable jumpscares to change sounds", Toast.LENGTH_SHORT).show(); return@clickable }
+                                    jumpscareSoundSelectedIndex = index
+                                    prefs.edit().putInt("saved_jumpscare_sound_index", index).apply()
+                                    when (index) {
+                                        0 -> { releaseJumpscareSoundPlayer(); jumpscareSoundPlayer = prepareMediaFromRes(R.raw.scream1, forJumpscareSound = true) }
+                                        1 -> { releaseJumpscareSoundPlayer(); jumpscareSoundPlayer = prepareMediaFromRes(R.raw.scream2, forJumpscareSound = true) }
+                                        2 -> { releaseJumpscareSoundPlayer() }
+                                        else -> { releaseJumpscareSoundPlayer() } // exhaustive
+                                    }
+                                }.padding(4.dp)) {
+                                    Box(modifier = Modifier.size(22.dp).background(if (jumpscareSoundSelectedIndex == index) Color.White else Color.Transparent, shape = CircleShape)
+                                        .border(width = 2.dp, color = Color.White, shape = CircleShape))
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Box(modifier = Modifier.height(34.dp).width(78.dp), contentAlignment = Alignment.CenterStart) { Text(label, color = Color(0xFFEFE7F6)) }
+                                }
+                            }
+                            soundSelector(0, "Scream 1")
+                            soundSelector(1, "Scream 2")
+                            soundSelector(2, "None")
+                        }
+
+                        Spacer(modifier = Modifier.width(12.dp))
+
+                        Column(modifier = Modifier.weight(1f).height((h * 0.22f).coerceIn(100f, 180f).dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+                            val previewName = when (jumpscareSoundSelectedIndex) {
+                                0 -> "Scream 1"
+                                1 -> "Scream 2"
+                                else -> "None"
+                            }
+
+                            Text(previewName, color = Color(0xFFEFE7F6), fontSize = (w * 0.055f).coerceIn(16f, 26f).sp, fontWeight = FontWeight.Bold)
+                            Spacer(modifier = Modifier.height(8.dp))
+
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                // same play/pause icon as main sound
+                                IconButton(onClick = {
+                                    if (!jumpscaresOn) { Toast.makeText(context, "Enable jumpscares to preview sounds", Toast.LENGTH_SHORT).show(); return@IconButton }
+                                    if (jumpscareSoundSelectedIndex == 2) { Toast.makeText(context, "No sound selected", Toast.LENGTH_SHORT).show(); return@IconButton }
+                                    jumpscareSoundPlayer?.let { mp ->
+                                        try {
+                                            if (mp.isPlaying) {
+                                                mp.pause(); jumpscareSoundIsPlaying = false
+                                                prefs.edit().putBoolean("saved_jumpscare_is_playing", false).apply()
+                                            } else {
+                                                mp.start(); jumpscareSoundIsPlaying = true
+                                                prefs.edit().putBoolean("saved_jumpscare_is_playing", true).apply()
+                                            }
+                                        } catch (e: Exception) { Toast.makeText(context, "Playback error: ${e.message}", Toast.LENGTH_SHORT).show() }
+                                    } ?: run {
+                                        when (jumpscareSoundSelectedIndex) {
+                                            0 -> {
+                                                releaseJumpscareSoundPlayer()
+                                                jumpscareSoundPlayer = prepareMediaFromRes(R.raw.scream1, forJumpscareSound = true)
+                                                jumpscareSoundPlayer?.setOnPreparedListener { p -> try { p.start(); jumpscareSoundIsPlaying = true; prefs.edit().putBoolean("saved_jumpscare_is_playing", true).apply() } catch (_: Exception) {} }
+                                            }
+                                            1 -> {
+                                                releaseJumpscareSoundPlayer()
+                                                jumpscareSoundPlayer = prepareMediaFromRes(R.raw.scream2, forJumpscareSound = true)
+                                                jumpscareSoundPlayer?.setOnPreparedListener { p -> try { p.start(); jumpscareSoundIsPlaying = true; prefs.edit().putBoolean("saved_jumpscare_is_playing", true).apply() } catch (_: Exception) {} }
+                                            }
+                                            else -> { Toast.makeText(context, "No sound selected", Toast.LENGTH_SHORT).show() }
+                                        }
+                                    }
+                                }) {
+                                    Image(painter = painterResource(id = if (jumpscareSoundIsPlaying) R.drawable.pause else R.drawable.play), contentDescription = null, modifier = Modifier.size(playSize))
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(6.dp))
+
+                            // interactive jumpscare slider
+                            val jsProgress = if (jumpscareSoundDurationMs > 0) (jumpscareSoundCurrentMs.toFloat() / jumpscareSoundDurationMs.toFloat()).coerceIn(0f, 1f) else 0f
+                            var jsSeeking by remember { mutableStateOf(false) }
+                            var jsSeekPercent by remember { mutableStateOf(0f) }
+
+                            Slider(
+                                value = if (jsSeeking) jsSeekPercent else jsProgress,
+                                onValueChange = { value -> jsSeekPercent = value; jsSeeking = true },
+                                onValueChangeFinished = {
+                                    jsSeeking = false
+                                    val targetMs = ((jsSeekPercent.coerceIn(0f,1f)) * (jumpscareSoundDurationMs.coerceAtLeast(1))).toInt()
                                     try {
-                                        context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                                    } catch (_: Exception) { /* ignore */ }
-                                } ?: prefs.edit().remove("saved_video_uri").apply()
+                                        jumpscareSoundPlayer?.seekTo(targetMs)
+                                        jumpscareSoundCurrentMs = targetMs
+                                        if (jumpscareSoundIsPlaying) { try { jumpscareSoundPlayer?.start(); jumpscareSoundIsPlaying = true } catch (_: Exception) {} }
+                                        prefs.edit().putInt("saved_jumpscare_pos", targetMs).apply()
+                                    } catch (e: Exception) {
+                                        Toast.makeText(context, "Seek failed: ${e.message}", Toast.LENGTH_SHORT).show()
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth().height(28.dp),
+                                enabled = jumpscareSoundDurationMs > 0 && jumpscareSoundSelectedIndex != 2 && jumpscaresOn,
+                                colors = SliderDefaults.colors(thumbColor = Color.White, activeTrackColor = Color.White, inactiveTrackColor = Color(0x66FFFFFF))
+                            )
+                        }
+                    }
+                }
 
-                                jumpscareCustomUri?.let { uri ->
-                                    prefs.edit().putString("saved_jumpscare_custom_uri", uri.toString()).apply()
-                                    try {
-                                        context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                                    } catch (_: Exception) { /* ignore */ }
-                                } ?: prefs.edit().remove("saved_jumpscare_custom_uri").apply()
+                Spacer(modifier = Modifier.height(sectionSpacing * 1.2f))
 
-                                jumpscareSoundCustomUri?.let { uri ->
-                                    prefs.edit().putString("saved_jumpscare_sound_uri", uri.toString()).apply()
-                                    try {
-                                        context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                                    } catch (_: Exception) { /* ignore */ }
-                                } ?: prefs.edit().remove("saved_jumpscare_sound_uri").apply()
-
-                                Toast.makeText(context, "Saved", Toast.LENGTH_SHORT).show()
-                            },
-                        contentAlignment = Alignment.Center
-                    ) {
+                // Save button
+                Box(modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp), contentAlignment = Alignment.Center) {
+                    Box(modifier = Modifier.fillMaxWidth().height(56.dp).background(saveGradient, RoundedCornerShape(14.dp)).clickable(interactionSource = noRipple, indication = null) {
+                        // persist state
+                        prefs.edit().putString("saved_message", message).apply()
+                        prefs.edit().putBoolean("saved_random_on", randomOn).apply()
+                        prefs.edit().putBoolean("saved_sound_on", isSoundOn).apply()
+                        prefs.edit().putBoolean("saved_jumpscares_on", jumpscaresOn).apply()
+                        prefs.edit().putInt("saved_jumpscare_index", jumpscareSelectedIndex).apply()
+                        prefs.edit().putInt("saved_jumpscare_sound_index", jumpscareSoundSelectedIndex).apply()
+                        selectedFileUriStr?.let { prefs.edit().putString("saved_video_uri", it).apply() }
+                        selectedFileName?.let { prefs.edit().putString("saved_video_name", it).apply() }
+                        jumpscareCustomUriStr?.let { prefs.edit().putString("saved_jumpscare_custom_uri", it).apply() }
+                        prefs.edit().putBoolean("saved_is_playing", isPlaying).apply()
+                        prefs.edit().putBoolean("saved_jumpscare_is_playing", jumpscareSoundIsPlaying).apply()
+                        Toast.makeText(context, "Saved", Toast.LENGTH_SHORT).show()
+                    }, contentAlignment = Alignment.Center) {
                         Text("Save", color = Color.White, fontWeight = FontWeight.SemiBold)
                     }
                 }
 
-                Spacer(modifier = Modifier.height(bottomBarHeight + 20.dp)) // keep space so content isn't hidden behind nav
+                Spacer(modifier = Modifier.height(bottomBarHeight + 20.dp))
             }
 
-            // --- solid BLACK rectangle behind the nav icons (drawn first so nav is on top) ---
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(bottomBarHeight + 10.dp)        // taller (adds 20dp to height)
-                    .align(Alignment.BottomCenter)
-                    .navigationBarsPadding()
-                    .padding(bottom = 4.dp, start = 0.dp, end = 0.dp) // wider horizontally (removes side padding)
-                    .background(Color(0xFF0B0711))          // new background color (#0B0711)
-            )
+            // Hidden bottom layer
+            Box(modifier = Modifier.fillMaxWidth().align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 0.dp)) {
+                Image(painter = painterResource(id = R.drawable.hiddenlayer), contentDescription = null, modifier = Modifier.fillMaxWidth().height(bottomBarHeight + 40.dp), contentScale = ContentScale.FillBounds)
+            }
 
+            // Bottom nav: disable click for current route
+            val navBackStackEntry by navController.currentBackStackEntryAsState()
+            val currentRoute = navBackStackEntry?.destination?.route
 
-            // --- Bottom nav (icons drawn on top of the black rectangle) ---
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .align(Alignment.BottomCenter)
-                    .navigationBarsPadding()
-                    .padding(bottom = 12.dp, start = 8.dp, end = 8.dp),
-                horizontalArrangement = Arrangement.Start,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                // Reordered per request and updated routes:
-                // 1) Home (first) -> MAIN activity/page (route "main")
-                BottomNavItemLocal(
-                    resId = R.drawable.houseotlined,
-                    label = "Home",
-                    iconSize = iconSize,
-                    modifier = Modifier.weight(1f),
-                    noRipple = noRipple
-                ) {
-                    // Go to MainActivity page / main route
-                    navController.navigate("main", navOptions {
-                        anim { enter = 0; exit = 0; popEnter = 0; popExit = 0 }
-                        launchSingleTop = true
-                    })
+            Row(modifier = Modifier.fillMaxWidth().align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 12.dp, start = 8.dp, end = 8.dp),
+                horizontalArrangement = Arrangement.Start, verticalAlignment = Alignment.CenterVertically) {
+
+                BottomNavItemLocal(resId = R.drawable.houseotlined, label = "Home", iconSize = 32.dp, modifier = Modifier.weight(1f), noRipple = noRipple, enabled = currentRoute != "main") {
+                    if (currentRoute != "main") {
+                        navController.navigate("main", navOptions {
+                            anim { enter = android.R.anim.slide_in_left; exit = android.R.anim.slide_out_right; popEnter = android.R.anim.slide_in_left; popExit = android.R.anim.slide_out_right }
+                            launchSingleTop = true
+                        })
+                    }
                 }
 
-                // 2) Msg & Voices -> stays on msg_voices (your Msg & Audios screen)
-                BottomNavItemLocal(
-                    resId = R.drawable.msgvoices,
-                    label = "Msg & Voices",
-                    iconSize = iconSize,
-                    modifier = Modifier.weight(1f),
-                    noRipple = noRipple
-                ) {
-                    // Navigate to the msg_voices route (current screen)
-                    navController.navigate("msg_voices", navOptions {
-                        anim { enter = 0; exit = 0; popEnter = 0; popExit = 0 }
-                        launchSingleTop = true
-                    })
+                BottomNavItemLocal(resId = R.drawable.msgvoices, label = "Msg & Voices", iconSize = 32.dp, modifier = Modifier.weight(1f), noRipple = noRipple, enabled = currentRoute != "msg_voices") {
+                    if (currentRoute != "msg_voices") {
+                        navController.navigate("msg_voices", navOptions {
+                            anim { enter = android.R.anim.slide_in_left; exit = android.R.anim.slide_out_right; popEnter = android.R.anim.slide_in_left; popExit = android.R.anim.slide_out_right }
+                            launchSingleTop = true
+                        })
+                    }
                 }
 
-                // 3) Statistics -> ObstrueStatistics (route "statistics")
-                BottomNavItemLocal(
-                    resId = R.drawable.statsoutline,
-                    label = "Statistics",
-                    iconSize = iconSize,
-                    modifier = Modifier.weight(1f),
-                    noRipple = noRipple
-                ) {
-                    // Navigate to your ObstrueStatistics screen (use route "statistics")
-                    navController.navigate("statistics", navOptions {
-                        anim { enter = 0; exit = 0; popEnter = 0; popExit = 0 }
-                        launchSingleTop = true
-                    })
+                BottomNavItemLocal(resId = R.drawable.statsoutline, label = "Statistics", iconSize = 32.dp, modifier = Modifier.weight(1f), noRipple = noRipple, enabled = currentRoute != "statistics") {
+                    if (currentRoute != "statistics") {
+                        navController.navigate("statistics", navOptions {
+                            anim { enter = android.R.anim.slide_in_left; exit = android.R.anim.slide_out_right; popEnter = android.R.anim.slide_in_left; popExit = android.R.anim.slide_out_right }
+                            launchSingleTop = true
+                        })
+                    }
                 }
 
-                // 4) To-do -> ObstrueToDoScreen (route "todo")
-                BottomNavItemLocal(
-                    resId = R.drawable.checkboxem,
-                    label = "To-do",
-                    iconSize = iconSize,
-                    modifier = Modifier.weight(1f),
-                    noRipple = noRipple
-                ) {
-                    // Navigate to your To-Do screen (ObstrueToDoScreen)
-                    navController.navigate("todo", navOptions {
-                        anim { enter = 0; exit = 0; popEnter = 0; popExit = 0 }
-                        launchSingleTop = true
-                    })
+                BottomNavItemLocal(resId = R.drawable.checkboxem, label = "To-do", iconSize = 32.dp, modifier = Modifier.weight(1f), noRipple = noRipple, enabled = currentRoute != "todo") {
+                    if (currentRoute != "todo") {
+                        navController.navigate("todo", navOptions {
+                            anim { enter = android.R.anim.slide_in_left; exit = android.R.anim.slide_out_right; popEnter = android.R.anim.slide_in_left; popExit = android.R.anim.slide_out_right }
+                            launchSingleTop = true
+                        })
+                    }
                 }
             }
 
-            // Confirmation dialog
+            // Confirmation dialog for upload
             if (showPermissionDialog) {
-                AlertDialog(
-                    onDismissRequest = { showPermissionDialog = false },
+                AlertDialog(onDismissRequest = { showPermissionDialog = false },
                     title = { Text("Allow file access?") },
                     text = { Text("This app will open a file picker so you can choose an MP4. We will request read access to the chosen file so audio can be played.") },
-                    confirmButton = {
-                        TextButton(onClick = {
-                            showPermissionDialog = false
-                            openDocumentLauncher.launch(arrayOf("video/mp4"))
-                        }) { Text("Continue") }
-                    },
-                    dismissButton = {
-                        TextButton(onClick = { showPermissionDialog = false }) { Text("Cancel") }
-                    }
-                )
-            }
-
-            // DIALOG to request permission for picking jumpscare sound (audio/mp3 or mp4)
-            if (showSoundPermissionDialog) {
-                AlertDialog(
-                    onDismissRequest = { showSoundPermissionDialog = false },
-                    title = { Text("Allow sound file access?") },
-                    text = { Text("Pick an MP3 or MP4 to use as a jumpscare sound. We will request read access to the chosen file.") },
-                    confirmButton = {
-                        TextButton(onClick = {
-                            showSoundPermissionDialog = false
-                            // allow both audio/* and video/mp4
-                            openSoundLauncher.launch(arrayOf("audio/*", "video/mp4"))
-                        }) { Text("Continue") }
-                    },
-                    dismissButton = {
-                        TextButton(onClick = { showSoundPermissionDialog = false }) { Text("Cancel") }
-                    }
-                )
+                    confirmButton = { TextButton(onClick = { showPermissionDialog = false; openDocumentLauncher.launch(arrayOf("video/mp4")) }) { Text("Continue") } },
+                    dismissButton = { TextButton(onClick = { showPermissionDialog = false }) { Text("Cancel") } })
             }
         }
     }
 }
 
-/** Local Bottom nav item used only in this file to avoid name conflicts with other files */
+/** Local bottom nav item used only in this file */
 @Composable
 private fun BottomNavItemLocal(
     resId: Int,
@@ -1513,22 +1025,13 @@ private fun BottomNavItemLocal(
     iconSize: Dp,
     modifier: Modifier = Modifier,
     noRipple: MutableInteractionSource,
+    enabled: Boolean = true,
     onClick: () -> Unit
 ) {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
-        modifier = modifier
-            .clickable(interactionSource = noRipple, indication = null) { onClick() }
-            .padding(vertical = 6.dp)
-    ) {
-        Image(
-            painter = painterResource(id = resId),
-            contentDescription = label,
-            modifier = Modifier.size(iconSize),
-            contentScale = ContentScale.Fit
-        )
+    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center,
+        modifier = modifier.then(if (enabled) Modifier.clickable(interactionSource = noRipple, indication = null) { onClick() } else Modifier).padding(vertical = 6.dp)) {
+        Image(painter = painterResource(id = resId), contentDescription = label, modifier = Modifier.size(iconSize), contentScale = ContentScale.Fit)
         Spacer(modifier = Modifier.height(6.dp))
-        Text(label, color = Color(0xFFCFD7E6), fontSize = 11.sp)
+        Text(label, color = if (enabled) Color(0xFFCFD7E6) else Color(0xFF6E7580), fontSize = 11.sp)
     }
 }
