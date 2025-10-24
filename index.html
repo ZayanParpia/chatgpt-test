@@ -1,1037 +1,1169 @@
-#NEW CODE
-
 package com.example.obstrue
 
+import android.app.usage.UsageEvents
+import android.app.usage.UsageStatsManager
 import android.content.Intent
-import android.graphics.BitmapFactory
-import android.media.AudioAttributes
-import android.media.MediaPlayer
+import android.content.pm.ApplicationInfo
+import android.content.pm.PackageManager
 import android.net.Uri
-import android.provider.OpenableColumns
+import android.os.Build
+import android.os.Bundle
+import com.example.obstrue.ui.statistics.ObstrueStatistics
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+
+import android.provider.Settings
+import android.view.ViewGroup
+import android.view.WindowManager
+import android.widget.FrameLayout
 import android.widget.Toast
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.core.animateFloatAsState
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.scale
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.lifecycle.DefaultLifecycleObserver
-import androidx.lifecycle.LifecycleOwner
+import androidx.core.graphics.drawable.toBitmap
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.navigation.NavHostController
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
+import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navOptions
-import androidx.navigation.compose.currentBackStackEntryAsState
+import com.example.obstrue.ui.theme.ObstrueTheme
 import kotlinx.coroutines.delay
-import java.io.File
-import java.io.FileOutputStream
-import java.io.InputStream
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.isActive
+import org.json.JSONArray
+import org.json.JSONObject
+import android.content.Context
+import java.util.Calendar
 
-/**
- * MsgVoicesScreen.kt
- *
- * - Sound label + switch are on the same row and placed ABOVE the sound section (upload/play).
- * - Jumpscares label + switch are on the same row and placed ABOVE the jumpscare card.
- * - Main and jumpscare play/pause use the same icons and size.
- * - Jumpscare sound slider is interactive and seeks while playing.
- * - Persistent prefs for toggles, selected URIs, and play flags.
- * - Bottom nav item for current page is disabled.
- *
- * Replace resource ids (R.drawable.* / R.raw.*) with your project's assets.
- */
+// ExoPlayer / Media3 imports are used later in the file for the splash video composable.
+// (I'll include the detailed video composable in the second half.)
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.ui.platform.LocalContext
+import androidx.annotation.RawRes
+import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
+import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.ui.PlayerView
 
-@Composable
-fun MsgVoicesScreen(navController: NavHostController) {
-    val context = LocalContext.current
-    val prefs = remember { context.getSharedPreferences("obstrue_prefs", android.content.Context.MODE_PRIVATE) }
-
-    // ---------- Persisted/UI State ----------
-    var isSoundOn by rememberSaveable { mutableStateOf(prefs.getBoolean("saved_sound_on", true)) }
-    var message by rememberSaveable { mutableStateOf(prefs.getString("saved_message", "") ?: "") }
-    var selectedFileUriStr by rememberSaveable { mutableStateOf(prefs.getString("saved_video_uri", null)) }
-    var selectedFileName by rememberSaveable { mutableStateOf(prefs.getString("saved_video_name", null)) }
-    val selectedFileUri: Uri? = selectedFileUriStr?.let { Uri.parse(it) }
-
-    var jumpscaresOn by rememberSaveable { mutableStateOf(prefs.getBoolean("saved_jumpscares_on", false)) }
-    var jumpscareSelectedIndex by rememberSaveable { mutableStateOf(prefs.getInt("saved_jumpscare_index", 0)) }
-    var jumpscareCustomUriStr by rememberSaveable { mutableStateOf(prefs.getString("saved_jumpscare_custom_uri", null)) }
-    val jumpscareCustomUri: Uri? = jumpscareCustomUriStr?.let { Uri.parse(it) }
-    var jumpscareCustomBitmap by remember { mutableStateOf<ImageBitmap?>(null) }
-
-    // Main media player (prepared on demand)
-    var mediaPlayer by remember { mutableStateOf<MediaPlayer?>(null) }
-    var durationMs by remember { mutableStateOf(0) }
-    var currentPositionMs by remember { mutableStateOf(0) }
-    var isPlaying by remember { mutableStateOf(prefs.getBoolean("saved_is_playing", false)) }
-    var isSeeking by remember { mutableStateOf(false) }
-    var seekPercent by remember { mutableStateOf(0f) }
-
-    // Random/sample
-    var randomOn by rememberSaveable { mutableStateOf(prefs.getBoolean("saved_random_on", false)) }
-    val randomScale by animateFloatAsState(if (randomOn) 1.06f else 1f)
-
-    // Jumpscare sound
-    var jumpscareSoundSelectedIndex by rememberSaveable { mutableStateOf(prefs.getInt("saved_jumpscare_sound_index", 0)) }
-    var jumpscareSoundPlayer by remember { mutableStateOf<MediaPlayer?>(null) }
-    var jumpscareSoundDurationMs by remember { mutableStateOf(0) }
-    var jumpscareSoundCurrentMs by remember { mutableStateOf(0) }
-    var jumpscareSoundIsPlaying by remember { mutableStateOf(prefs.getBoolean("saved_jumpscare_is_playing", false)) }
-
-    var showPermissionDialog by remember { mutableStateOf(false) }
-
-    val noRipple = remember { MutableInteractionSource() }
-
-    // ---------- Helpers ----------
-    fun resolveDisplayName(uri: Uri?): String? {
-        uri ?: return null
-        val resolver = context.contentResolver
-        val projection = arrayOf(OpenableColumns.DISPLAY_NAME)
-        resolver.query(uri, projection, null, null, null)?.use { cursor ->
-            if (cursor.moveToFirst()) {
-                val idx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                if (idx >= 0) return cursor.getString(idx)
-            }
-        }
-        return uri.lastPathSegment
+// -------------------- Helper: readable minutes -> friendly string --------------------
+private fun formatMinutesReadable(minutes: Int): String {
+    if (minutes <= 0) return "—"
+    if (minutes < 60) return "${minutes} min"
+    val h = minutes / 60
+    val m = minutes % 60
+    return if (m == 0) {
+        "${h} hr"
+    } else {
+        "${h} hr ${m} min"
     }
+}
 
-    fun loadBitmapFromUri(uri: Uri?): ImageBitmap? {
-        uri ?: return null
-        return try {
-            context.contentResolver.openInputStream(uri)?.use {
-                BitmapFactory.decodeStream(it)?.asImageBitmap()
-            }
-        } catch (_: Exception) {
-            null
+// -------------------- Persistence helpers (unchanged) --------------------
+private fun saveInstalledAppsToPrefs(context: Context, apps: List<AppEntry>) {
+    try {
+        val prefs = context.getSharedPreferences("obstrue_prefs", Context.MODE_PRIVATE)
+        val arr = JSONArray()
+        for (app in apps) {
+            val o = JSONObject()
+            o.put("package", app.packageName)
+            o.put("label", app.label)
+            arr.put(o)
         }
+        prefs.edit().putString("installed_apps", arr.toString()).apply()
+    } catch (e: Exception) {
+        // ignore
     }
+}
 
-    fun fallbackCopyToCacheAndPrepare(uri: Uri, targetForMain: Boolean = true): MediaPlayer? {
-        try {
-            context.contentResolver.openInputStream(uri)?.use { input ->
-                val temp = File(context.cacheDir, "obstrue_tmp_${System.currentTimeMillis()}.mp4")
-                FileOutputStream(temp).use { out -> input.copyTo(out) }
-                val mp = MediaPlayer().apply {
-                    setAudioAttributes(
-                        AudioAttributes.Builder()
-                            .setUsage(AudioAttributes.USAGE_MEDIA)
-                            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                            .build()
-                    )
-                    setDataSource(temp.absolutePath)
-                    prepareAsync()
-                    setOnPreparedListener { player ->
-                        if (targetForMain) durationMs = try { player.duration } catch (_: Exception) { 0 }
-                        else jumpscareSoundDurationMs = try { player.duration } catch (_: Exception) { 0 }
-                    }
-                    setOnCompletionListener {
-                        try { it.seekTo(0) } catch (_: Exception) {}
-                        if (targetForMain) isPlaying = false else jumpscareSoundIsPlaying = false
-                    }
-                }
-                return mp
-            } ?: run {
-                Toast.makeText(context, "Unable to open file", Toast.LENGTH_SHORT).show()
-            }
-        } catch (e: Exception) {
-            Toast.makeText(context, "Fallback failed: ${e.message}", Toast.LENGTH_LONG).show()
+private fun saveBlockedAppsToPrefs(context: Context, apps: List<AppEntry>) {
+    try {
+        val prefs = context.getSharedPreferences("obstrue_prefs", Context.MODE_PRIVATE)
+        val arr = JSONArray()
+        for (app in apps) {
+            val o = JSONObject()
+            o.put("package", app.packageName)
+            o.put("label", app.label)
+            arr.put(o)
         }
-        return null
+        prefs.edit().putString("blocked_apps", arr.toString()).apply()
+    } catch (e: Exception) {
+        // ignore
     }
+}
 
-    fun prepareMediaFromUri(localContext: android.content.Context, uri: Uri, forJumpscareSound: Boolean = false): MediaPlayer? {
-        return try {
-            localContext.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
-                val mp = MediaPlayer().apply {
-                    setAudioAttributes(
-                        AudioAttributes.Builder()
-                            .setUsage(AudioAttributes.USAGE_MEDIA)
-                            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                            .build()
-                    )
-                    setDataSource(pfd.fileDescriptor)
-                    prepareAsync()
-                    setOnPreparedListener { player ->
-                        if (forJumpscareSound) jumpscareSoundDurationMs = try { player.duration } catch (_: Exception) { 0 }
-                        else durationMs = try { player.duration } catch (_: Exception) { 0 }
-                    }
-                    setOnCompletionListener {
-                        try { it.seekTo(0) } catch (_: Exception) {}
-                        if (forJumpscareSound) jumpscareSoundIsPlaying = false else isPlaying = false
-                    }
-                }
-                mp
-            } ?: fallbackCopyToCacheAndPrepare(uri, targetForMain = !forJumpscareSound)
-        } catch (se: SecurityException) {
-            Toast.makeText(localContext, "Permission denied", Toast.LENGTH_LONG).show()
-            fallbackCopyToCacheAndPrepare(uri, targetForMain = !forJumpscareSound)
-        } catch (e: Exception) {
-            Toast.makeText(localContext, "Can't play selected file: ${e.message}", Toast.LENGTH_SHORT).show()
-            fallbackCopyToCacheAndPrepare(uri, targetForMain = !forJumpscareSound)
-        }
+private fun saveAppTimeLimitToPrefs(context: Context, pkg: String, minutes: Int) {
+    try {
+        val prefs = context.getSharedPreferences("obstrue_prefs", Context.MODE_PRIVATE)
+        val existing = prefs.getString("app_time_limits", "{}") ?: "{}"
+        val obj = JSONObject(existing)
+        obj.put(pkg, minutes)
+        prefs.edit().putString("app_time_limits", obj.toString()).apply()
+    } catch (_: Exception) {
+        // ignore
     }
+}
 
-    fun prepareMediaFromRes(resId: Int, forJumpscareSound: Boolean = false): MediaPlayer? {
-        return try {
-            val mp = MediaPlayer.create(context, resId)
-            mp?.setAudioAttributes(
-                AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_MEDIA)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                    .build()
-            )
-            mp?.setOnCompletionListener {
-                try { it.seekTo(0) } catch (_: Exception) {}
-                if (forJumpscareSound) jumpscareSoundIsPlaying = false else isPlaying = false
-            }
-            mp?.let {
-                if (forJumpscareSound) jumpscareSoundDurationMs = try { it.duration } catch (_: Exception) { 0 }
-                else durationMs = try { it.duration } catch (_: Exception) { 0 }
-            }
-            mp
-        } catch (e: Exception) {
-            Toast.makeText(context, "Can't load resource: ${e.message}", Toast.LENGTH_SHORT).show()
-            null
+private fun removeAppTimeLimitFromPrefs(context: Context, pkg: String) {
+    try {
+        val prefs = context.getSharedPreferences("obstrue_prefs", Context.MODE_PRIVATE)
+        val existing = prefs.getString("app_time_limits", null) ?: return
+        val obj = JSONObject(existing)
+        if (obj.has(pkg)) {
+            obj.remove(pkg)
+            prefs.edit().putString("app_time_limits", obj.toString()).apply()
         }
+    } catch (_: Exception) {
+        // ignore
     }
+}
 
-    fun releaseJumpscareSoundPlayer() {
-        try {
-            jumpscareSoundPlayer?.let { p ->
-                try { if (p.isPlaying) p.stop() } catch (_: Exception) {}
-                try { p.release() } catch (_: Exception) {}
-            }
-        } catch (_: Exception) {}
-        jumpscareSoundPlayer = null
-        jumpscareSoundDurationMs = 0
-        jumpscareSoundCurrentMs = 0
-        jumpscareSoundIsPlaying = false
-        prefs.edit().putBoolean("saved_jumpscare_is_playing", false).apply()
+private fun loadAppTimeLimitsFromPrefs(context: Context): Map<String, Int> {
+    val out = mutableMapOf<String, Int>()
+    try {
+        val prefs = context.getSharedPreferences("obstrue_prefs", Context.MODE_PRIVATE)
+        val saved = prefs.getString("app_time_limits", null) ?: return out
+        val obj = JSONObject(saved)
+        val keys = obj.keys()
+        while (keys.hasNext()) {
+            val k = keys.next()
+            val v = obj.optInt(k, 0)
+            out[k] = v
+        }
+    } catch (_: Exception) {
+        // ignore
     }
+    return out
+}
 
-    // ---------- Lifecycle handling ----------
-    val lifecycleOwner = LocalLifecycleOwner.current
-    DisposableEffect(lifecycleOwner) {
-        val observer = object : DefaultLifecycleObserver {
-            override fun onPause(owner: LifecycleOwner) {
-                try { mediaPlayer?.pause() } catch (_: Exception) {}
-                isPlaying = false
-                try { jumpscareSoundPlayer?.pause() } catch (_: Exception) {}
-                jumpscareSoundIsPlaying = false
-            }
-            override fun onDestroy(owner: LifecycleOwner) {
-                try { mediaPlayer?.release() } catch (_: Exception) {}
-                mediaPlayer = null; isPlaying = false
-                releaseJumpscareSoundPlayer()
-            }
-        }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose {
-            lifecycleOwner.lifecycle.removeObserver(observer)
-            try { mediaPlayer?.release() } catch (_: Exception) {}
-            mediaPlayer = null; isPlaying = false
-            releaseJumpscareSoundPlayer()
-        }
+private fun saveAppUsageToPrefs(context: Context, pkg: String, minutes: Int) {
+    try {
+        val prefs = context.getSharedPreferences("obstrue_prefs", Context.MODE_PRIVATE)
+        val existing = prefs.getString("app_usage", "{}") ?: "{}"
+        val obj = JSONObject(existing)
+        obj.put(pkg, minutes)
+        prefs.edit().putString("app_usage", obj.toString()).apply()
+    } catch (_: Exception) {
+        // ignore
     }
+}
 
-    // ---------- Activity Result Launchers ----------
-    val openDocumentLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
-        if (jumpscaresOn) {
-            Toast.makeText(context, "Disable jumpscares first", Toast.LENGTH_SHORT).show()
-            return@rememberLauncherForActivityResult
+private fun removeAppUsageFromPrefs(context: Context, pkg: String) {
+    try {
+        val prefs = context.getSharedPreferences("obstrue_prefs", Context.MODE_PRIVATE)
+        val existing = prefs.getString("app_usage", null) ?: return
+        val obj = JSONObject(existing)
+        if (obj.has(pkg)) {
+            obj.remove(pkg)
+            prefs.edit().putString("app_usage", obj.toString()).apply()
         }
-        uri?.let { pickedUri ->
-            selectedFileUriStr = pickedUri.toString()
-            selectedFileName = resolveDisplayName(pickedUri)
-            try { context.contentResolver.takePersistableUriPermission(pickedUri, Intent.FLAG_GRANT_READ_URI_PERMISSION) } catch (_: Exception) {}
-            prefs.edit().putString("saved_video_uri", selectedFileUriStr).apply()
-            prefs.edit().putString("saved_video_name", selectedFileName).apply()
-            // prepare but don't auto-start (user explicitly plays)
-            prepareMediaFromUri(context, pickedUri, forJumpscareSound = false)?.let { mp ->
-                mediaPlayer?.release()
-                mediaPlayer = mp
-                isPlaying = false
-                prefs.edit().putBoolean("saved_is_playing", false).apply()
-            }
-        }
+    } catch (_: Exception) {
+        // ignore
     }
+}
 
-    val openImageLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
-        uri?.let { pickedUri ->
-            if (!jumpscaresOn) {
-                Toast.makeText(context, "Enable jumpscares to change images", Toast.LENGTH_SHORT).show()
-                return@rememberLauncherForActivityResult
-            }
-            jumpscareCustomUriStr = pickedUri.toString()
-            jumpscareCustomBitmap = loadBitmapFromUri(pickedUri)
-            try { context.contentResolver.takePersistableUriPermission(pickedUri, Intent.FLAG_GRANT_READ_URI_PERMISSION) } catch (_: Exception) {}
-            prefs.edit().putString("saved_jumpscare_custom_uri", jumpscareCustomUriStr).apply()
+private fun loadAppUsageFromPrefs(context: Context): Map<String, Int> {
+    val out = mutableMapOf<String, Int>()
+    try {
+        val prefs = context.getSharedPreferences("obstrue_prefs", Context.MODE_PRIVATE)
+        val saved = prefs.getString("app_usage", null) ?: return out
+        val obj = JSONObject(saved)
+        val keys = obj.keys()
+        while (keys.hasNext()) {
+            val k = keys.next()
+            val v = obj.optInt(k, 0)
+            out[k] = v
         }
+    } catch (_: Exception) {
+        // ignore
     }
+    return out
+}
 
-    // ---------- Progress updaters ----------
-    LaunchedEffect(mediaPlayer) {
-        while (mediaPlayer != null) {
-            val mp = mediaPlayer
-            if (mp != null) {
+private fun loadBlockedAppsFromPrefs(context: Context): List<AppEntry> {
+    val out = mutableListOf<AppEntry>()
+    try {
+        val prefs = context.getSharedPreferences("obstrue_prefs", Context.MODE_PRIVATE)
+        val saved = prefs.getString("blocked_apps", null) ?: return out
+        val arr = JSONArray(saved)
+        val pm = context.packageManager
+        for (i in 0 until arr.length()) {
+            val o = arr.optJSONObject(i) ?: continue
+            val pkg = o.optString("package", "")
+            val label = o.optString("label", pkg)
+            val iconBitmap: ImageBitmap = try {
+                val drawable = pm.getApplicationIcon(pkg)
+                drawable.toBitmap().asImageBitmap()
+            } catch (_: Exception) {
                 try {
-                    val dur = if (durationMs > 0) durationMs else try { mp.duration } catch (_: Exception) { 0 }
-                    if (dur > 0) durationMs = dur
-                    val cur = try { mp.currentPosition } catch (_: Exception) { 0 }
-                    currentPositionMs = cur
-                    if (!isSeeking && durationMs > 0) seekPercent = (currentPositionMs.toFloat() / durationMs.toFloat())
-                } catch (_: Exception) {}
-            }
-            delay(250L)
-        }
-    }
-
-    LaunchedEffect(jumpscareSoundPlayer) {
-        while (jumpscareSoundPlayer != null) {
-            val mp = jumpscareSoundPlayer
-            if (mp != null) {
-                try {
-                    val dur = if (jumpscareSoundDurationMs > 0) jumpscareSoundDurationMs else try { mp.duration } catch (_: Exception) { 0 }
-                    if (dur > 0) jumpscareSoundDurationMs = dur
-                    val cur = try { mp.currentPosition } catch (_: Exception) { 0 }
-                    jumpscareSoundCurrentMs = cur
-                } catch (_: Exception) {}
-            }
-            delay(250L)
-        }
-    }
-
-    // Persist toggles / message / indices
-    LaunchedEffect(isSoundOn) { prefs.edit().putBoolean("saved_sound_on", isSoundOn).apply() }
-    LaunchedEffect(jumpscaresOn) { prefs.edit().putBoolean("saved_jumpscares_on", jumpscaresOn).apply() }
-    LaunchedEffect(jumpscareSelectedIndex) { prefs.edit().putInt("saved_jumpscare_index", jumpscareSelectedIndex).apply() }
-    LaunchedEffect(jumpscareSoundSelectedIndex) { prefs.edit().putInt("saved_jumpscare_sound_index", jumpscareSoundSelectedIndex).apply() }
-    LaunchedEffect(randomOn) { prefs.edit().putBoolean("saved_random_on", randomOn).apply() }
-    LaunchedEffect(message) { prefs.edit().putString("saved_message", message).apply() }
-
-    // Mutual exclusivity behavior: enabling one disables the other
-    LaunchedEffect(isSoundOn) {
-        if (isSoundOn && jumpscaresOn) {
-            jumpscaresOn = false
-            releaseJumpscareSoundPlayer()
-            prefs.edit().putBoolean("saved_jumpscares_on", false).apply()
-        }
-        if (!isSoundOn) {
-            try { mediaPlayer?.pause() } catch (_: Exception) {}
-            isPlaying = false
-            prefs.edit().putBoolean("saved_is_playing", false).apply()
-        }
-    }
-    LaunchedEffect(jumpscaresOn) {
-        if (jumpscaresOn && isSoundOn) {
-            isSoundOn = false
-            try { mediaPlayer?.pause() } catch (_: Exception) {}
-            isPlaying = false
-            prefs.edit().putBoolean("saved_is_playing", false).apply()
-            prefs.edit().putBoolean("saved_sound_on", false).apply()
-        }
-        if (!jumpscaresOn) {
-            releaseJumpscareSoundPlayer()
-            prefs.edit().putBoolean("saved_jumpscare_is_playing", false).apply()
-        }
-    }
-
-    // Restore custom bitmap if saved
-    LaunchedEffect(jumpscareCustomUriStr) {
-        jumpscareCustomUriStr?.let {
-            try {
-                val u = Uri.parse(it)
-                jumpscareCustomBitmap = loadBitmapFromUri(u)
-            } catch (_: Exception) {}
-        }
-    }
-
-    // Restore main media if persisted; do not auto-start unless user had it playing and allowed
-    LaunchedEffect(selectedFileUriStr) {
-        selectedFileUriStr?.let { uriStr ->
-            try {
-                val uri = Uri.parse(uriStr)
-                if (mediaPlayer == null) {
-                    prepareMediaFromUri(context, uri, forJumpscareSound = false)?.let { mp ->
-                        mediaPlayer?.release()
-                        mediaPlayer = mp
-                        val savedPlay = prefs.getBoolean("saved_is_playing", false)
-                        if (savedPlay && isSoundOn) {
-                            mediaPlayer?.setOnPreparedListener { player ->
-                                durationMs = try { player.duration } catch (_: Exception) { 0 }
-                                try { player.start(); isPlaying = true } catch (_: Exception) {}
-                            }
-                        }
-                    }
-                }
-            } catch (_: Exception) {}
-        }
-    }
-
-    // Prepare jumpscare sound selection with exhaustive when
-    LaunchedEffect(jumpscareSoundSelectedIndex, jumpscareCustomUriStr) {
-        if (!jumpscaresOn) return@LaunchedEffect
-        when (jumpscareSoundSelectedIndex) {
-            0 -> {
-                releaseJumpscareSoundPlayer()
-                jumpscareSoundPlayer = prepareMediaFromRes(R.raw.scream1, forJumpscareSound = true)
-                val saved = prefs.getBoolean("saved_jumpscare_is_playing", false)
-                if (saved) {
-                    jumpscareSoundPlayer?.setOnPreparedListener { p ->
-                        jumpscareSoundDurationMs = try { p.duration } catch (_: Exception) { 0 }
-                        try { p.start(); jumpscareSoundIsPlaying = true } catch (_: Exception) {}
-                    }
+                    val drawable = context.resources.getDrawable(R.drawable.unlock, null)
+                    drawable.toBitmap().asImageBitmap()
+                } catch (_: Exception) {
+                    android.graphics.Bitmap.createBitmap(1, 1, android.graphics.Bitmap.Config.ARGB_8888).asImageBitmap()
                 }
             }
-            1 -> {
-                releaseJumpscareSoundPlayer()
-                jumpscareSoundPlayer = prepareMediaFromRes(R.raw.scream2, forJumpscareSound = true)
-                val saved = prefs.getBoolean("saved_jumpscare_is_playing", false)
-                if (saved) {
-                    jumpscareSoundPlayer?.setOnPreparedListener { p ->
-                        jumpscareSoundDurationMs = try { p.duration } catch (_: Exception) { 0 }
-                        try { p.start(); jumpscareSoundIsPlaying = true } catch (_: Exception) {}
-                    }
-                }
-            }
-            2 -> {
-                // custom sound (if present)
-                jumpscareCustomUriStr?.let { uriStr ->
-                    try {
-                        val uri = Uri.parse(uriStr)
-                        releaseJumpscareSoundPlayer()
-                        jumpscareSoundPlayer = prepareMediaFromUri(context, uri, forJumpscareSound = true)
-                        val saved = prefs.getBoolean("saved_jumpscare_is_playing", false)
-                        if (saved) {
-                            jumpscareSoundPlayer?.setOnPreparedListener { p ->
-                                jumpscareSoundDurationMs = try { p.duration } catch (_: Exception) { 0 }
-                                try { p.start(); jumpscareSoundIsPlaying = true } catch (_: Exception) {}
-                            }
-                        }
-                    } catch (_: Exception) { releaseJumpscareSoundPlayer() }
-                } ?: run { releaseJumpscareSoundPlayer() }
-            }
-            else -> {
-                // exhaustive fallback
-                releaseJumpscareSoundPlayer()
-            }
-        }
-    }
 
-    // ---------- UI sizing + layout ----------
-    val configuration = LocalConfiguration.current
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color(0xFF0B0710))
-    ) {
-        BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-            val w = maxWidth.value
-            val h = maxHeight.value
-
-            val titleSize = when {
-                configuration.screenWidthDp < 360 -> 28.sp
-                configuration.screenWidthDp < 420 -> 34.sp
-                configuration.screenWidthDp < 600 -> 40.sp
-                else -> 48.sp
-            }
-            val messageFontSize = (w * 0.04f).coerceIn(12f, 20f).sp
-            val charCountSize = (w * 0.033f).coerceIn(10f, 14f).sp
-            val playSize = (w * 0.11f).coerceIn(36f, 56f).dp
-            val bottomBarHeight = (h * 0.11f).coerceIn(72f, 120f).dp
-            val uploadIconSize = (w * 0.16f).coerceIn(48f, 120f).dp
-            val uploadHeight = (h * 0.12f).coerceIn(64f, 160f).dp
-            val messageBoxHeight = (h * 0.33f).coerceIn(200f, 420f).dp
-            val topSpacing = (h * 0.05f).coerceIn(24f, 120f).dp
-            val sectionSpacing = (h * 0.045f).coerceIn(20f, 72f).dp // slightly larger spacing
-            val betweenSpacing = (h * 0.02f).coerceIn(8f, 40f).dp
-            val cardColor = Color(0xFF2A1E2B)
-            val textBoxColor = Color(0xFF241827)
-            val saveGradient = Brush.horizontalGradient(listOf(Color(0xFF7B61FF), Color(0xFFFF69B4)))
-            val sectionTitleSize = (w * 0.045f).coerceIn(16f, 22f).sp
-
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .verticalScroll(rememberScrollState())
-                    .padding(horizontal = (w * 0.05f).coerceIn(12f, 36f).dp)
-                    .padding(bottom = (h * 0.12f).coerceIn(90f, 180f).dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Spacer(modifier = Modifier.height(topSpacing))
-
-                // Screen title
-                Text(
-                    text = "Msg & Audios",
-                    color = Color(0xFFEFE7F6),
-                    fontSize = titleSize,
-                    fontWeight = FontWeight.ExtraBold
+            out.add(
+                AppEntry(
+                    packageName = pkg,
+                    label = label,
+                    iconBitmap = iconBitmap,
+                    installerPackage = null,
+                    isSystemApp = false,
+                    isUpdatedSystemApp = false
                 )
+            )
+        }
+    } catch (_: Exception) {
+        // ignore parse errors
+    }
+    return out
+}
 
-                Spacer(modifier = Modifier.height(betweenSpacing))
+private data class AppEntry(
+    val packageName: String,
+    val label: String,
+    val iconBitmap: ImageBitmap,
+    val installerPackage: String? = null,
+    val isSystemApp: Boolean = false,
+    val isUpdatedSystemApp: Boolean = false
+)
 
-                // Message input area
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(messageBoxHeight)
-                        .background(if (jumpscaresOn) Color(0xFF2F2F2F) else textBoxColor, RoundedCornerShape(20.dp))
-                        .padding((w * 0.04f).coerceIn(10f, 20f).dp)
-                ) {
-                    Column(modifier = Modifier.fillMaxSize()) {
-                        val scroll = rememberScrollState()
-                        BasicTextField(
-                            value = message,
-                            onValueChange = {
-                                if (jumpscaresOn) {
-                                    Toast.makeText(context, "Disable jumpscares first", Toast.LENGTH_SHORT).show()
-                                    return@BasicTextField
-                                }
-                                if (it.length <= 250) message = it else Toast.makeText(context, "Character limit reached", Toast.LENGTH_SHORT).show()
-                            },
-                            modifier = Modifier.fillMaxWidth().weight(1f).verticalScroll(scroll),
-                            textStyle = TextStyle(color = Color.White, fontSize = messageFontSize),
-                            cursorBrush = SolidColor(Color.White)
-                        )
+// -------------------- Usage helper: compute precise foreground time --------------------
+/**
+ * Compute per-package foreground minutes for [packages] between today's midnight and now.
+ * Primary method: UsageEvents (MOVE_TO_FOREGROUND / MOVE_TO_BACKGROUND) — most precise.
+ * Fallbacks: queryAndAggregateUsageStats (API 29+), then queryUsageStats daily interval.
+ *
+ * Returns map package -> minutesUsed (rounded down).
+ */
+private suspend fun getUsageMinutesForPackages(context: Context, packages: List<String>): Map<String, Int> {
+    // Guard
+    if (packages.isEmpty()) return emptyMap()
 
-                        Spacer(modifier = Modifier.height(8.dp))
-
-                        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                            Button(
-                                onClick = {
-                                    if (jumpscaresOn) {
-                                        Toast.makeText(context, "Disable jumpscares first", Toast.LENGTH_SHORT).show()
-                                        return@Button
-                                    }
-                                    randomOn = !randomOn
-                                    if (randomOn) {
-                                        val samples = listOf(
-                                            "Stay focused — you got this.",
-                                            "Remember why you started.",
-                                            "One step at a time. Finish the task.",
-                                            "Being a loser is hard, getting successful is hard, choose your hard...",
-                                            "You waste so much time on your phone..."
-                                        )
-                                        message = samples.random()
-                                    }
-                                },
-                                modifier = Modifier.scale(randomScale),
-                                colors = ButtonDefaults.buttonColors(containerColor = if (randomOn) Color(0xFF20B2AA) else Color(0xFF3C2B3E)),
-                                shape = RoundedCornerShape(8.dp)
-                            ) {
-                                Text(text = if (randomOn) "Random (On)" else "Random", color = Color.White, fontSize = 14.sp)
-                            }
-
-                            Spacer(modifier = Modifier.width(8.dp))
-
-                            Button(onClick = { if (!jumpscaresOn) message = "" else Toast.makeText(context, "Disable jumpscares first", Toast.LENGTH_SHORT).show() },
-                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF3C2B3E)), shape = RoundedCornerShape(8.dp)) {
-                                Text("Clear", color = Color.White, fontSize = charCountSize)
-                            }
-
-                            Spacer(modifier = Modifier.weight(1f))
-                            Text("${message.length}/250", color = Color(0xFFB6A9C1), fontSize = charCountSize)
-                        }
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(sectionSpacing))
-
-                // --------------------
-                // SOUND LABEL + SWITCH
-                // (on the same row, above the upload / sound controls)
-                // --------------------
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(text = "Sound", color = Color(0xFFEFE7F6), fontSize = sectionTitleSize, fontWeight = FontWeight.SemiBold)
-                    Spacer(modifier = Modifier.weight(1f))
-                    Switch(
-                        checked = isSoundOn,
-                        onCheckedChange = { checked ->
-                            isSoundOn = checked
-                            prefs.edit().putBoolean("saved_sound_on", isSoundOn).apply()
-                            if (checked && jumpscaresOn) {
-                                // disable jumpscares when enabling sound
-                                jumpscaresOn = false
-                                releaseJumpscareSoundPlayer()
-                                prefs.edit().putBoolean("saved_jumpscares_on", false).apply()
-                            }
-                            if (!checked) {
-                                try { mediaPlayer?.pause() } catch (_: Exception) {}
-                                isPlaying = false
-                                prefs.edit().putBoolean("saved_is_playing", false).apply()
-                            }
-                        },
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = Color.White, checkedTrackColor = Color(0xFF20C997),
-                            uncheckedThumbColor = Color.White, uncheckedTrackColor = Color(0xFF7A7A7A)
-                        )
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                // --------------------
-                // UPLOAD / MAIN SOUND CARD
-                // (sound controls live inside this card)
-                // --------------------
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(cardColor, RoundedCornerShape(18.dp))
-                        .padding(16.dp)
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        // upload area (tappable)
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(uploadHeight)
-                                .background(if (jumpscaresOn) Color(0xFF2F2F2F) else Color(0xFF3C2B3E), RoundedCornerShape(14.dp))
-                                .clickable(interactionSource = noRipple, indication = null) {
-                                    if (!isSoundOn) {
-                                        // Even if jumpscares are off, we allow upload only when Sound is ON (you can choose different UX)
-                                        showPermissionDialog = true
-                                    } else {
-                                        showPermissionDialog = true
-                                    }
-                                },
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Image(painter = painterResource(id = R.drawable.upload), contentDescription = null, modifier = Modifier.size(uploadIconSize), contentScale = ContentScale.Fit)
-                        }
-
-                        Text("Upload", color = Color(0xFFEFE7F6), modifier = Modifier.padding(top = 8.dp))
-                        Text("(mp4 file)", color = Color(0xFFB6A9C1), fontSize = 12.sp)
-
-                        // If a file is selected, show filename + play/pause + slider
-                        selectedFileUri?.let {
-                            Spacer(modifier = Modifier.height(10.dp))
-                            Box(modifier = Modifier.fillMaxWidth().background(Color(0xFF372933), RoundedCornerShape(10.dp)).padding(10.dp)) {
-                                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                                    Text(text = selectedFileName ?: it.lastPathSegment ?: "Selected file", color = Color(0xFFEFE7F6),
-                                        maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-
-                                    Spacer(modifier = Modifier.width(8.dp))
-
-                                    // Play/Pause button for main media (same look as jumpscare)
-                                    Image(
-                                        painter = painterResource(id = if (isPlaying) R.drawable.pause else R.drawable.play),
-                                        contentDescription = if (isPlaying) "Pause" else "Play",
-                                        modifier = Modifier
-                                            .size(playSize)
-                                            .clickable(interactionSource = noRipple, indication = null) {
-                                                if (!isSoundOn) {
-                                                    Toast.makeText(context, "Enable sound to play", Toast.LENGTH_SHORT).show()
-                                                    return@clickable
-                                                }
-                                                mediaPlayer?.let { mp ->
-                                                    try {
-                                                        if (mp.isPlaying) {
-                                                            mp.pause(); isPlaying = false
-                                                            prefs.edit().putBoolean("saved_is_playing", false).apply()
-                                                        } else {
-                                                            mp.start(); isPlaying = true
-                                                            prefs.edit().putBoolean("saved_is_playing", true).apply()
-                                                        }
-                                                    } catch (e: Exception) {
-                                                        Toast.makeText(context, "Can't play: ${e.message}", Toast.LENGTH_SHORT).show()
-                                                    }
-                                                } ?: run {
-                                                    // try to prepare and start
-                                                    selectedFileUri?.let { u ->
-                                                        prepareMediaFromUri(context, u, forJumpscareSound = false)?.let { mp2 ->
-                                                            mediaPlayer?.release()
-                                                            mediaPlayer = mp2
-                                                            try { mp2.start(); isPlaying = true; prefs.edit().putBoolean("saved_is_playing", true).apply() } catch (_: Exception) {}
-                                                        }
-                                                    }
-                                                }
-                                            },
-                                        contentScale = ContentScale.Fit
-                                    )
-                                }
-                            }
-
-                            Spacer(modifier = Modifier.height(8.dp))
-
-                            val progress = if (durationMs > 0) (currentPositionMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f) else 0f
-                            Slider(
-                                value = if (isSeeking) seekPercent else progress,
-                                onValueChange = { value ->
-                                    seekPercent = value
-                                    isSeeking = true
-                                },
-                                onValueChangeFinished = {
-                                    isSeeking = false
-                                    val targetMs = ((seekPercent.coerceIn(0f, 1f)) * (durationMs.coerceAtLeast(1))).toInt()
-                                    try {
-                                        mediaPlayer?.seekTo(targetMs)
-                                        currentPositionMs = targetMs
-                                        if (isPlaying) { try { mediaPlayer?.start(); isPlaying = true } catch (_: Exception) {} }
-                                    } catch (e: Exception) {
-                                        Toast.makeText(context, "Seek failed: ${e.message}", Toast.LENGTH_SHORT).show()
-                                    }
-                                },
-                                modifier = Modifier.fillMaxWidth().height(28.dp),
-                                enabled = isSoundOn && (durationMs > 0),
-                                colors = SliderDefaults.colors(
-                                    thumbColor = if (isSoundOn) Color.White else Color(0xFF7A7A7A),
-                                    activeTrackColor = if (isSoundOn) Color.White else Color(0xFF7A7A7A),
-                                    inactiveTrackColor = Color(0x66FFFFFF)
-                                )
-                            )
-                        }
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(sectionSpacing))
-
-                // --------------------
-                // JUMPSCARES LABEL + SWITCH (same row)
-                // --------------------
-                Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(text = "Jumpscares (Experimental)", color = Color(0xFFEFE7F6), fontSize = sectionTitleSize, fontWeight = FontWeight.SemiBold)
-                    Spacer(modifier = Modifier.weight(1f))
-                    Switch(
-                        checked = jumpscaresOn,
-                        onCheckedChange = { enabled ->
-                            jumpscaresOn = enabled
-                            prefs.edit().putBoolean("saved_jumpscares_on", jumpscaresOn).apply()
-                            if (enabled && isSoundOn) {
-                                // disabling sound when jumpscares enabled
-                                isSoundOn = false
-                                try { mediaPlayer?.pause() } catch (_: Exception) {}
-                                isPlaying = false
-                                prefs.edit().putBoolean("saved_sound_on", false).apply()
-                            }
-                            if (!enabled) {
-                                releaseJumpscareSoundPlayer()
-                                prefs.edit().putBoolean("saved_jumpscare_is_playing", false).apply()
-                            }
-                        },
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = Color.White, checkedTrackColor = Color(0xFF20C997),
-                            uncheckedThumbColor = Color.White, uncheckedTrackColor = Color(0xFF7A7A7A)
-                        )
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                // --------------------
-                // Jumpscare image selector card
-                // --------------------
-                Box(modifier = Modifier.fillMaxWidth().background(cardColor, RoundedCornerShape(18.dp)).padding(12.dp)) {
-                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Column(modifier = Modifier.width((w * 0.32f).coerceIn(120f, 220f).dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                            @Composable
-                            fun selectorIcon(index: Int, drawableRes: Int? = null) {
-                                Row(verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.fillMaxWidth().clickable {
-                                        if (jumpscaresOn) {
-                                            jumpscareSelectedIndex = index
-                                            prefs.edit().putInt("saved_jumpscare_index", jumpscareSelectedIndex).apply()
-                                            if (index == 2 && jumpscareCustomUri == null) openImageLauncher.launch(arrayOf("image/*"))
-                                        } else {
-                                            Toast.makeText(context, "Enable jumpscares to change images", Toast.LENGTH_SHORT).show()
-                                        }
-                                    }.padding(4.dp)
-                                ) {
-                                    Box(modifier = Modifier.size(22.dp).background(if (jumpscareSelectedIndex == index) Color.White else Color.Transparent, shape = CircleShape)
-                                        .border(width = 2.dp, color = Color.White, shape = CircleShape))
-                                    Spacer(modifier = Modifier.width(10.dp))
-                                    if (drawableRes != null) Image(painter = painterResource(id = drawableRes), contentDescription = null, modifier = Modifier.size(34.dp), contentScale = ContentScale.Fit)
-                                    else Box(modifier = Modifier.size(34.dp).background(Color(0xFF3C2B3E), shape = RoundedCornerShape(6.dp)), contentAlignment = Alignment.Center) { Text("?", color = Color.White, fontSize = 12.sp) }
-                                }
-                            }
-
-                            selectorIcon(0, R.drawable.burger)
-                            selectorIcon(1, R.drawable.jobapp)
-
-                            // custom image selector
-                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(4.dp).clickable {
-                                if (!jumpscaresOn) { Toast.makeText(context, "Enable jumpscares to change images", Toast.LENGTH_SHORT).show(); return@clickable }
-                                jumpscareSelectedIndex = 2
-                                prefs.edit().putInt("saved_jumpscare_index", jumpscareSelectedIndex).apply()
-                                openImageLauncher.launch(arrayOf("image/*"))
-                            }) {
-                                Box(modifier = Modifier.size(22.dp).background(if (jumpscareSelectedIndex == 2) Color.White else Color.Transparent, shape = CircleShape)
-                                    .border(width = 2.dp, color = Color.White, shape = CircleShape))
-                                Spacer(modifier = Modifier.width(10.dp))
-                                if (jumpscareCustomBitmap != null) Image(bitmap = jumpscareCustomBitmap!!, contentDescription = null, modifier = Modifier.size(34.dp), contentScale = ContentScale.Crop)
-                                else Box(modifier = Modifier.size(34.dp).background(Color(0xFF3C2B3E), shape = RoundedCornerShape(6.dp)), contentAlignment = Alignment.Center) { Text("C", color = Color.White, fontSize = 12.sp) }
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.width(12.dp))
-
-                        Column(modifier = Modifier.weight(1f).height((h * 0.28f).coerceIn(120f, 260f).dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-                            Box(modifier = Modifier.fillMaxWidth().weight(1f).background(Color.Transparent, RoundedCornerShape(6.dp)), contentAlignment = Alignment.Center) {
-                                when (jumpscareSelectedIndex) {
-                                    0 -> Image(painter = painterResource(id = R.drawable.burger), contentDescription = "burger preview", modifier = Modifier.fillMaxWidth().padding(8.dp), contentScale = ContentScale.Fit)
-                                    1 -> Image(painter = painterResource(id = R.drawable.jobapp), contentDescription = "jobapp preview", modifier = Modifier.fillMaxWidth().padding(8.dp), contentScale = ContentScale.Fit)
-                                    2 -> if (jumpscareCustomBitmap != null) Image(bitmap = jumpscareCustomBitmap!!, contentDescription = "custom preview", modifier = Modifier.fillMaxWidth().padding(8.dp), contentScale = ContentScale.Fit) else Text("No custom image\nselected", color = Color.White)
-                                    else -> Text("", color = Color.Transparent) // exhaustive fallback
-                                }
-                            }
-
-                            Spacer(modifier = Modifier.height(8.dp))
-
-                            val displayedName = when (jumpscareSelectedIndex) {
-                                0 -> "Burger"
-                                1 -> "Job Application"
-                                2 -> jumpscareCustomUri?.let { resolveDisplayName(it) } ?: "Custom"
-                                else -> ""
-                            }
-                            Text(displayedName, color = Color(0xFFEFE7F6), fontWeight = FontWeight.SemiBold)
-                        }
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(sectionSpacing))
-
-                // --------------------
-                // Jumpscare sounds card (preview + interactive slider)
-                // --------------------
-                Box(modifier = Modifier.fillMaxWidth().background(cardColor, RoundedCornerShape(18.dp)).padding(12.dp)) {
-                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Column(modifier = Modifier.width((w * 0.32f).coerceIn(120f, 220f).dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                            @Composable
-                            fun soundSelector(index: Int, label: String) {
-                                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().clickable {
-                                    if (!jumpscaresOn) { Toast.makeText(context, "Enable jumpscares to change sounds", Toast.LENGTH_SHORT).show(); return@clickable }
-                                    jumpscareSoundSelectedIndex = index
-                                    prefs.edit().putInt("saved_jumpscare_sound_index", index).apply()
-                                    when (index) {
-                                        0 -> { releaseJumpscareSoundPlayer(); jumpscareSoundPlayer = prepareMediaFromRes(R.raw.scream1, forJumpscareSound = true) }
-                                        1 -> { releaseJumpscareSoundPlayer(); jumpscareSoundPlayer = prepareMediaFromRes(R.raw.scream2, forJumpscareSound = true) }
-                                        2 -> { releaseJumpscareSoundPlayer() }
-                                        else -> { releaseJumpscareSoundPlayer() } // exhaustive
-                                    }
-                                }.padding(4.dp)) {
-                                    Box(modifier = Modifier.size(22.dp).background(if (jumpscareSoundSelectedIndex == index) Color.White else Color.Transparent, shape = CircleShape)
-                                        .border(width = 2.dp, color = Color.White, shape = CircleShape))
-                                    Spacer(modifier = Modifier.width(10.dp))
-                                    Box(modifier = Modifier.height(34.dp).width(78.dp), contentAlignment = Alignment.CenterStart) { Text(label, color = Color(0xFFEFE7F6)) }
-                                }
-                            }
-                            soundSelector(0, "Scream 1")
-                            soundSelector(1, "Scream 2")
-                            soundSelector(2, "None")
-                        }
-
-                        Spacer(modifier = Modifier.width(12.dp))
-
-                        Column(modifier = Modifier.weight(1f).height((h * 0.22f).coerceIn(100f, 180f).dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-                            val previewName = when (jumpscareSoundSelectedIndex) {
-                                0 -> "Scream 1"
-                                1 -> "Scream 2"
-                                else -> "None"
-                            }
-
-                            Text(previewName, color = Color(0xFFEFE7F6), fontSize = (w * 0.055f).coerceIn(16f, 26f).sp, fontWeight = FontWeight.Bold)
-                            Spacer(modifier = Modifier.height(8.dp))
-
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                // same play/pause icon as main sound
-                                IconButton(onClick = {
-                                    if (!jumpscaresOn) { Toast.makeText(context, "Enable jumpscares to preview sounds", Toast.LENGTH_SHORT).show(); return@IconButton }
-                                    if (jumpscareSoundSelectedIndex == 2) { Toast.makeText(context, "No sound selected", Toast.LENGTH_SHORT).show(); return@IconButton }
-                                    jumpscareSoundPlayer?.let { mp ->
-                                        try {
-                                            if (mp.isPlaying) {
-                                                mp.pause(); jumpscareSoundIsPlaying = false
-                                                prefs.edit().putBoolean("saved_jumpscare_is_playing", false).apply()
-                                            } else {
-                                                mp.start(); jumpscareSoundIsPlaying = true
-                                                prefs.edit().putBoolean("saved_jumpscare_is_playing", true).apply()
-                                            }
-                                        } catch (e: Exception) { Toast.makeText(context, "Playback error: ${e.message}", Toast.LENGTH_SHORT).show() }
-                                    } ?: run {
-                                        when (jumpscareSoundSelectedIndex) {
-                                            0 -> {
-                                                releaseJumpscareSoundPlayer()
-                                                jumpscareSoundPlayer = prepareMediaFromRes(R.raw.scream1, forJumpscareSound = true)
-                                                jumpscareSoundPlayer?.setOnPreparedListener { p -> try { p.start(); jumpscareSoundIsPlaying = true; prefs.edit().putBoolean("saved_jumpscare_is_playing", true).apply() } catch (_: Exception) {} }
-                                            }
-                                            1 -> {
-                                                releaseJumpscareSoundPlayer()
-                                                jumpscareSoundPlayer = prepareMediaFromRes(R.raw.scream2, forJumpscareSound = true)
-                                                jumpscareSoundPlayer?.setOnPreparedListener { p -> try { p.start(); jumpscareSoundIsPlaying = true; prefs.edit().putBoolean("saved_jumpscare_is_playing", true).apply() } catch (_: Exception) {} }
-                                            }
-                                            else -> { Toast.makeText(context, "No sound selected", Toast.LENGTH_SHORT).show() }
-                                        }
-                                    }
-                                }) {
-                                    Image(painter = painterResource(id = if (jumpscareSoundIsPlaying) R.drawable.pause else R.drawable.play), contentDescription = null, modifier = Modifier.size(playSize))
-                                }
-                            }
-
-                            Spacer(modifier = Modifier.height(6.dp))
-
-                            // interactive jumpscare slider
-                            val jsProgress = if (jumpscareSoundDurationMs > 0) (jumpscareSoundCurrentMs.toFloat() / jumpscareSoundDurationMs.toFloat()).coerceIn(0f, 1f) else 0f
-                            var jsSeeking by remember { mutableStateOf(false) }
-                            var jsSeekPercent by remember { mutableStateOf(0f) }
-
-                            Slider(
-                                value = if (jsSeeking) jsSeekPercent else jsProgress,
-                                onValueChange = { value -> jsSeekPercent = value; jsSeeking = true },
-                                onValueChangeFinished = {
-                                    jsSeeking = false
-                                    val targetMs = ((jsSeekPercent.coerceIn(0f,1f)) * (jumpscareSoundDurationMs.coerceAtLeast(1))).toInt()
-                                    try {
-                                        jumpscareSoundPlayer?.seekTo(targetMs)
-                                        jumpscareSoundCurrentMs = targetMs
-                                        if (jumpscareSoundIsPlaying) { try { jumpscareSoundPlayer?.start(); jumpscareSoundIsPlaying = true } catch (_: Exception) {} }
-                                        prefs.edit().putInt("saved_jumpscare_pos", targetMs).apply()
-                                    } catch (e: Exception) {
-                                        Toast.makeText(context, "Seek failed: ${e.message}", Toast.LENGTH_SHORT).show()
-                                    }
-                                },
-                                modifier = Modifier.fillMaxWidth().height(28.dp),
-                                enabled = jumpscareSoundDurationMs > 0 && jumpscareSoundSelectedIndex != 2 && jumpscaresOn,
-                                colors = SliderDefaults.colors(thumbColor = Color.White, activeTrackColor = Color.White, inactiveTrackColor = Color(0x66FFFFFF))
-                            )
-                        }
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(sectionSpacing * 1.2f))
-
-                // Save button
-                Box(modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp), contentAlignment = Alignment.Center) {
-                    Box(modifier = Modifier.fillMaxWidth().height(56.dp).background(saveGradient, RoundedCornerShape(14.dp)).clickable(interactionSource = noRipple, indication = null) {
-                        // persist state
-                        prefs.edit().putString("saved_message", message).apply()
-                        prefs.edit().putBoolean("saved_random_on", randomOn).apply()
-                        prefs.edit().putBoolean("saved_sound_on", isSoundOn).apply()
-                        prefs.edit().putBoolean("saved_jumpscares_on", jumpscaresOn).apply()
-                        prefs.edit().putInt("saved_jumpscare_index", jumpscareSelectedIndex).apply()
-                        prefs.edit().putInt("saved_jumpscare_sound_index", jumpscareSoundSelectedIndex).apply()
-                        selectedFileUriStr?.let { prefs.edit().putString("saved_video_uri", it).apply() }
-                        selectedFileName?.let { prefs.edit().putString("saved_video_name", it).apply() }
-                        jumpscareCustomUriStr?.let { prefs.edit().putString("saved_jumpscare_custom_uri", it).apply() }
-                        prefs.edit().putBoolean("saved_is_playing", isPlaying).apply()
-                        prefs.edit().putBoolean("saved_jumpscare_is_playing", jumpscareSoundIsPlaying).apply()
-                        Toast.makeText(context, "Saved", Toast.LENGTH_SHORT).show()
-                    }, contentAlignment = Alignment.Center) {
-                        Text("Save", color = Color.White, fontWeight = FontWeight.SemiBold)
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(bottomBarHeight + 20.dp))
+    return try {
+        // Run heavy work on IO dispatcher
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            val out = mutableMapOf<String, Int>()
+            val usm = context.getSystemService(Context.USAGE_STATS_SERVICE) as? UsageStatsManager
+            if (usm == null) {
+                return@withContext out
             }
 
-            // Hidden bottom layer
-            Box(modifier = Modifier.fillMaxWidth().align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 0.dp)) {
-                Image(painter = painterResource(id = R.drawable.hiddenlayer), contentDescription = null, modifier = Modifier.fillMaxWidth().height(bottomBarHeight + 40.dp), contentScale = ContentScale.FillBounds)
+            // compute today's midnight -> now
+            val cal = Calendar.getInstance()
+            val end = System.currentTimeMillis()
+            cal.set(Calendar.HOUR_OF_DAY, 0)
+            cal.set(Calendar.MINUTE, 0)
+            cal.set(Calendar.SECOND, 0)
+            cal.set(Calendar.MILLISECOND, 0)
+            val start = cal.timeInMillis
+
+            // Attempt primary: UsageEvents
+            try {
+                val events = usm.queryEvents(start, end)
+                val ev = UsageEvents.Event()
+                val totals = mutableMapOf<String, Long>()    // totals per package in ms
+                val lastForeground = mutableMapOf<String, Long>() // last foreground timestamp per pkg
+
+                while (events.hasNextEvent()) {
+                    events.getNextEvent(ev)
+                    val pkg = ev.packageName ?: continue
+                    when (ev.eventType) {
+                        UsageEvents.Event.MOVE_TO_FOREGROUND -> {
+                            lastForeground[pkg] = ev.timeStamp
+                        }
+                        UsageEvents.Event.MOVE_TO_BACKGROUND -> {
+                            val startTs = lastForeground.remove(pkg)
+                            if (startTs != null && ev.timeStamp >= startTs) {
+                                val prev = totals[pkg] ?: 0L
+                                totals[pkg] = prev + (ev.timeStamp - startTs)
+                            }
+                        }
+                        else -> {
+                            // ignore other events
+                        }
+                    }
+                }
+
+                // If any package still marked foreground at 'end', add (end - start)
+                for ((pkg, startTs) in lastForeground) {
+                    if (end >= startTs) {
+                        val prev = totals[pkg] ?: 0L
+                        totals[pkg] = prev + (end - startTs)
+                    }
+                }
+
+                // fill out map for requested packages
+                for (pkg in packages) {
+                    val ms = totals[pkg] ?: 0L
+                    val minutes = (ms / 60000L).toInt()
+                    out[pkg] = minutes
+                }
+
+                // return results
+                return@withContext out
+            } catch (e: Exception) {
+                // UsageEvents may be restricted on some devices — fall back
             }
 
-            // Bottom nav: disable click for current route
-            val navBackStackEntry by navController.currentBackStackEntryAsState()
-            val currentRoute = navBackStackEntry?.destination?.route
-
-            Row(modifier = Modifier.fillMaxWidth().align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 12.dp, start = 8.dp, end = 8.dp),
-                horizontalArrangement = Arrangement.Start, verticalAlignment = Alignment.CenterVertically) {
-
-                BottomNavItemLocal(resId = R.drawable.houseotlined, label = "Home", iconSize = 32.dp, modifier = Modifier.weight(1f), noRipple = noRipple, enabled = currentRoute != "main") {
-                    if (currentRoute != "main") {
-                        navController.navigate("main", navOptions {
-                            anim { enter = android.R.anim.slide_in_left; exit = android.R.anim.slide_out_right; popEnter = android.R.anim.slide_in_left; popExit = android.R.anim.slide_out_right }
-                            launchSingleTop = true
-                        })
+            // Fallback 1: aggregated API (API 29+)
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    val aggregated = usm.queryAndAggregateUsageStats(start, end)
+                    for (pkg in packages) {
+                        val minutes = (aggregated[pkg]?.totalTimeInForeground ?: 0L / 60000L).toInt()
+                        out[pkg] = minutes
                     }
+                    return@withContext out
                 }
-
-                BottomNavItemLocal(resId = R.drawable.msgvoices, label = "Msg & Voices", iconSize = 32.dp, modifier = Modifier.weight(1f), noRipple = noRipple, enabled = currentRoute != "msg_voices") {
-                    if (currentRoute != "msg_voices") {
-                        navController.navigate("msg_voices", navOptions {
-                            anim { enter = android.R.anim.slide_in_left; exit = android.R.anim.slide_out_right; popEnter = android.R.anim.slide_in_left; popExit = android.R.anim.slide_out_right }
-                            launchSingleTop = true
-                        })
-                    }
-                }
-
-                BottomNavItemLocal(resId = R.drawable.statsoutline, label = "Statistics", iconSize = 32.dp, modifier = Modifier.weight(1f), noRipple = noRipple, enabled = currentRoute != "statistics") {
-                    if (currentRoute != "statistics") {
-                        navController.navigate("statistics", navOptions {
-                            anim { enter = android.R.anim.slide_in_left; exit = android.R.anim.slide_out_right; popEnter = android.R.anim.slide_in_left; popExit = android.R.anim.slide_out_right }
-                            launchSingleTop = true
-                        })
-                    }
-                }
-
-                BottomNavItemLocal(resId = R.drawable.checkboxem, label = "To-do", iconSize = 32.dp, modifier = Modifier.weight(1f), noRipple = noRipple, enabled = currentRoute != "todo") {
-                    if (currentRoute != "todo") {
-                        navController.navigate("todo", navOptions {
-                            anim { enter = android.R.anim.slide_in_left; exit = android.R.anim.slide_out_right; popEnter = android.R.anim.slide_in_left; popExit = android.R.anim.slide_out_right }
-                            launchSingleTop = true
-                        })
-                    }
-                }
+            } catch (e: Exception) {
+                // ignore and try next fallback
             }
 
-            // Confirmation dialog for upload
-            if (showPermissionDialog) {
-                AlertDialog(onDismissRequest = { showPermissionDialog = false },
-                    title = { Text("Allow file access?") },
-                    text = { Text("This app will open a file picker so you can choose an MP4. We will request read access to the chosen file so audio can be played.") },
-                    confirmButton = { TextButton(onClick = { showPermissionDialog = false; openDocumentLauncher.launch(arrayOf("video/mp4")) }) { Text("Continue") } },
-                    dismissButton = { TextButton(onClick = { showPermissionDialog = false }) { Text("Cancel") } })
+            // Fallback 2: queryUsageStats DAILY interval and sum
+            try {
+                val list = usm.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, start, end) ?: emptyList()
+                val mapTotals = mutableMapOf<String, Long>()
+                for (u in list) {
+                    val pkg = u.packageName
+                    val prev = mapTotals[pkg] ?: 0L
+                    val add = try { u.totalTimeInForeground } catch (_: Exception) { 0L }
+                    mapTotals[pkg] = prev + add
+                }
+                for (pkg in packages) {
+                    val minutes = (mapTotals[pkg] ?: 0L / 60000L).toInt()
+                    out[pkg] = minutes
+                }
+            } catch (e: Exception) {
+                // ignore; will return zeros for missing
+                for (pkg in packages) out[pkg] = 0
+            }
+
+            return@withContext out
+        }
+    } catch (t: Throwable) {
+        // protect caller: return zero map on any unexpected error
+        return emptyMap()
+    }
+}
+// -------------------- Video Splash Composable --------------------
+/**
+ * Plays a fullscreen MP4 from res/raw and calls [onFinished] when playback ends.
+ * Uses Media3 (ExoPlayer) inside AndroidView and cleans up the player automatically.
+ *
+ * Requirements:
+ *  - Put your splash MP4 at app/src/main/res/raw/splash_video.mp4
+ *  - Add media3 / exoplayer dependencies to your module Gradle
+ */
+@Composable
+fun VideoSplashScreen(
+    @RawRes videoResId: Int = R.raw.splash_video,
+    onFinished: () -> Unit
+) {
+    val context = LocalContext.current
+
+    // remember player to avoid recreation on recomposition
+    val exoPlayer = remember {
+        ExoPlayer.Builder(context).build().apply {
+            val uri = Uri.parse("android.resource://${context.packageName}/$videoResId")
+            setMediaItem(MediaItem.fromUri(uri))
+            prepare()
+            playWhenReady = true
+            // Optionally mute: volume = 0f
+            // Optionally loop: repeatMode = Player.REPEAT_MODE_ONE
+        }
+    }
+
+    var ended by remember { mutableStateOf(false) }
+
+    DisposableEffect(exoPlayer) {
+        val listener = object : Player.Listener {
+            override fun onPlaybackStateChanged(state: Int) {
+                if (state == Player.STATE_ENDED) {
+                    ended = true
+                }
+            }
+        }
+        exoPlayer.addListener(listener)
+
+        onDispose {
+            exoPlayer.removeListener(listener)
+            exoPlayer.release()
+        }
+    }
+
+    LaunchedEffect(ended) {
+        if (ended) {
+            // tiny delay to allow last frame to render / a short fade if you later add one
+            kotlinx.coroutines.delay(180L)
+            onFinished()
+        }
+    }
+
+    AndroidView(
+        factory = { ctx ->
+            PlayerView(ctx).apply {
+                player = exoPlayer
+                useController = false
+                layoutParams = FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT
+                )
+            }
+        },
+        modifier = Modifier.fillMaxSize()
+    )
+}
+
+// -------------------- MainActivity and UI --------------------
+class MainActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        // Use system splash screen for fast native launch (Android 12+)
+        installSplashScreen()
+
+        super.onCreate(savedInstanceState)
+        setContent {
+            ObstrueTheme {
+                // Show the video splash first, then render the original NavHost
+                var showSplash by remember { mutableStateOf(true) }
+
+                if (showSplash) {
+                    VideoSplashScreen(videoResId = R.raw.splash_video) {
+                        showSplash = false
+                    }
+                } else {
+                    val navController = rememberNavController()
+                    NavHost(
+                        navController = navController,
+                        startDestination = "main"
+                    ) {
+                        composable("main") { ObstrueMainScreen(navController) }
+                        composable("msg_voices") { MsgVoicesScreen(navController) }
+                        composable("todo") { ObstrueToDoScreen(navController) }
+                        composable("statistics") { ObstrueStatistics(navController) }
+                        composable("settings") { ObstrueSettings(navController) }
+
+                        composable("schedulegui/{pkg}") { backStackEntry ->
+                            val pkgArg = backStackEntry.arguments?.getString("pkg")?.let { if (it.isNotBlank()) Uri.decode(it) else null }
+                            ScheduleGuiScreen(navController = navController, incomingPkg = pkgArg)
+                        }
+                        composable("schedulegui") {
+                            ScheduleGuiScreen(navController = navController, incomingPkg = null)
+                        }
+                    }
+                }
             }
         }
     }
 }
 
-/** Local bottom nav item used only in this file */
+/**
+ * Blocking Activity shown when a blocked app is opened and its time is exceeded.
+ * Uses window flags to try to show above locked screen where allowed.
+ */
+class BlockedActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+
+        // These flags help the activity appear on top / when device is locked where policy allows.
+        window.addFlags(
+            WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or
+                    WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+                    WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
+        )
+
+        // Prevent finish when touching outside
+        setFinishOnTouchOutside(false)
+
+        setContent {
+            Surface(modifier = Modifier.fillMaxSize(), color = Color(0xCC0B0710)) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(24.dp),
+                    verticalArrangement = Arrangement.Center,
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(text = "Test successful", color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold)
+                    Spacer(modifier = Modifier.height(20.dp))
+                    Button(onClick = { finish() }) {
+                        Text("Exit")
+                    }
+                }
+            }
+        }
+    }
+
+    override fun finish() {
+        super.finish()
+        overridePendingTransition(0, 0)
+    }
+}
+
 @Composable
-private fun BottomNavItemLocal(
-    resId: Int,
-    label: String,
-    iconSize: Dp,
-    modifier: Modifier = Modifier,
-    noRipple: MutableInteractionSource,
-    enabled: Boolean = true,
-    onClick: () -> Unit
-) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center,
-        modifier = modifier.then(if (enabled) Modifier.clickable(interactionSource = noRipple, indication = null) { onClick() } else Modifier).padding(vertical = 6.dp)) {
+fun ObstrueMainScreen(navController: NavHostController) {
+    val context = LocalContext.current
+
+    val configuration = LocalConfiguration.current
+    val bottomBarHeight = (configuration.screenHeightDp * 0.11f).coerceIn(72f, 120f).dp
+
+    val blockedApps = remember { mutableStateListOf<AppEntry>() }
+    val installedApps = remember { mutableStateListOf<AppEntry>() }
+
+    var showAddDialog by remember { mutableStateOf(false) }
+    var showNeedPermissionPrompt by remember { mutableStateOf(false) }
+
+    var showScheduleDialog by remember { mutableStateOf(false) }
+    var scheduleTargetPkg by remember { mutableStateOf<String?>(null) }
+    var scheduleTargetLabel by remember { mutableStateOf<String?>(null) }
+    var scheduleSelectedMinutes by remember { mutableStateOf(0) }
+
+    val appTimeLimits = remember { mutableStateMapOf<String, Int>() }
+    val appUsage = remember { mutableStateMapOf<String, Int>() } // minutes per package
+
+    val coroutineScope = rememberCoroutineScope()
+    var monitorJob by remember { mutableStateOf<Job?>(null) }
+
+    val prefs = context.getSharedPreferences("obstrue_prefs", android.content.Context.MODE_PRIVATE)
+    var isLocked by remember { mutableStateOf(prefs.getBoolean("is_locked", false)) }
+    var pressed by remember { mutableStateOf(false) }
+
+    // helper: open usage access settings
+    fun openUsageAccessSettings() {
+        try {
+            val intent = Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(intent)
+        } catch (t: Throwable) {
+            val fallback = Intent(Settings.ACTION_SETTINGS)
+            fallback.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(fallback)
+        }
+    }
+
+    fun openManageAllAppsSettings() {
+        try {
+            val intent = Intent(Settings.ACTION_MANAGE_ALL_APPLICATIONS_SETTINGS)
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(intent)
+        } catch (t: Throwable) {
+            try {
+                val intent2 = Intent(Settings.ACTION_APPLICATION_SETTINGS)
+                intent2.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                context.startActivity(intent2)
+            } catch (_: Throwable) {
+            }
+        }
+    }
+
+    // Refresh usage for blocked apps using precise events-based helper.
+    suspend fun refreshUsageForBlockedApps() {
+        try {
+            val pkgs = blockedApps.map { it.packageName }
+            if (pkgs.isEmpty()) return
+            val usageMap = getUsageMinutesForPackages(context, pkgs)
+            // persist + update UI-state
+            for ((pkg, minutes) in usageMap) {
+                saveAppUsageToPrefs(context, pkg, minutes)
+            }
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                usageMap.forEach { (pkg, minutes) -> appUsage[pkg] = minutes }
+            }
+        } catch (e: Exception) {
+            // keep previous data on error
+        }
+    }
+
+    // Monitoring job: polls usage events and shows BlockedActivity if needed
+    fun startMonitoringBlockedApps() {
+        monitorJob?.cancel()
+        monitorJob = coroutineScope.launch {
+            val usageMgr = context.getSystemService(Context.USAGE_STATS_SERVICE) as? UsageStatsManager
+            if (usageMgr == null) return@launch
+
+            while (isActive) {
+                try {
+                    // Reload time limits each loop so changes are picked up without restarting monitor
+                    val freshLimits = try { loadAppTimeLimitsFromPrefs(context) } catch (_: Exception) { emptyMap() }
+
+                    // scan the last few seconds of events for foreground
+                    val end = System.currentTimeMillis()
+                    val begin = end - 3000L
+                    val events = usageMgr.queryEvents(begin, end)
+                    val ev = UsageEvents.Event()
+                    var foregroundPkg: String? = null
+                    while (events.hasNextEvent()) {
+                        events.getNextEvent(ev)
+                        if (ev.eventType == UsageEvents.Event.MOVE_TO_FOREGROUND) {
+                            foregroundPkg = ev.packageName
+                        }
+                    }
+
+                    if (!foregroundPkg.isNullOrBlank()) {
+                        val pkg = foregroundPkg
+                        val limit = freshLimits[pkg] ?: 0
+                        val isBlockedPkg = blockedApps.any { it.packageName == pkg }
+                        if (limit > 0 && isBlockedPkg) {
+                            try {
+                                // get up-to-date minutes for this pkg (today)
+                                val usageMap = getUsageMinutesForPackages(context, listOf(pkg))
+                                val usedMin = usageMap[pkg] ?: 0
+
+                                saveAppUsageToPrefs(context, pkg, usedMin)
+                                kotlinx.coroutines.withContext(kotlin.coroutines.Dispatchers.Main) {
+                                    appUsage[pkg] = usedMin
+                                }
+
+                                if (usedMin >= limit) {
+                                    // Time's up -> launch BlockedActivity
+                                    try {
+                                        val intent = Intent(context, BlockedActivity::class.java).apply {
+                                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION or Intent.FLAG_ACTIVITY_MULTIPLE_TASK)
+                                            putExtra("blocked_pkg", pkg)
+                                        }
+                                        context.startActivity(intent)
+                                    } catch (t: Throwable) {
+                                        // background start may be restricted on some devices/OS versions
+                                    }
+
+                                    // small cooldown to avoid spamming launches
+                                    kotlinx.coroutines.delay(1500L)
+                                }
+                            } catch (_: Exception) {
+                                // ignore per-package errors
+                            }
+                        }
+                    }
+                } catch (_: Exception) {
+                    // protect loop
+                }
+
+                kotlinx.coroutines.delay(1000L)
+            }
+        }
+    }
+
+    fun stopMonitoringBlockedApps() {
+        monitorJob?.cancel()
+        monitorJob = null
+    }
+
+    // Initial load: blocked apps, time limits, usage
+    LaunchedEffect(Unit) {
+        val pm = context.packageManager
+        val visibleCount = try { pm.getInstalledApplications(PackageManager.GET_META_DATA).size } catch (_: Throwable) { 0 }
+        if (visibleCount < 8) {
+            showNeedPermissionPrompt = true
+        } else {
+            kotlinx.coroutines.withContext(kotlin.coroutines.Dispatchers.IO) {
+                val loaded = loadBlockedAppsFromPrefs(context)
+                val times = loadAppTimeLimitsFromPrefs(context)
+                val usages = loadAppUsageFromPrefs(context)
+                kotlinx.coroutines.withContext(kotlin.coroutines.Dispatchers.Main) {
+                    if (loaded.isNotEmpty()) {
+                        blockedApps.clear(); blockedApps.addAll(loaded)
+                    }
+                    if (times.isNotEmpty()) {
+                        appTimeLimits.clear(); appTimeLimits.putAll(times)
+                    }
+                    if (usages.isNotEmpty()) {
+                        appUsage.clear(); appUsage.putAll(usages)
+                    }
+
+                    // if already locked, start monitoring
+                    if (isLocked) startMonitoringBlockedApps()
+                }
+            }
+        }
+    }
+
+    // watch lock changes
+    LaunchedEffect(isLocked) {
+        prefs.edit().putBoolean("is_locked", isLocked).apply()
+        if (isLocked) {
+            startMonitoringBlockedApps()
+        } else {
+            stopMonitoringBlockedApps()
+        }
+    }
+
+    LaunchedEffect(blockedApps.size) {
+        // refresh usage periodically while UI active
+        while (isActive) {
+            try {
+                refreshUsageForBlockedApps()
+            } catch (_: Exception) {}
+            kotlinx.coroutines.delay(15_000L)
+        }
+    }
+
+    fun onAddAppClicked() {
+        val pm = context.packageManager
+        val visibleCount = try { pm.getInstalledApplications(PackageManager.GET_META_DATA).size } catch (t: Throwable) { 0 }
+        if (visibleCount < 8) {
+            showNeedPermissionPrompt = true
+        } else {
+            showAddDialog = true
+        }
+    }
+
+    LaunchedEffect(showAddDialog) {
+        if (showAddDialog && installedApps.isEmpty()) {
+            val list = kotlinx.coroutines.withContext(kotlin.coroutines.Dispatchers.IO) {
+                val pm = context.packageManager
+                pm.getInstalledApplications(PackageManager.GET_META_DATA)
+                    .mapNotNull { appInfo ->
+                        try {
+                            val pkg = appInfo.packageName
+                            if (pkg == context.packageName) return@mapNotNull null
+                            val installer = try {
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) pm.getInstallSourceInfo(pkg).initiatingPackageName
+                                else pm.getInstallerPackageName(pkg)
+                            } catch (_: Exception) { null }
+                            val label = pm.getApplicationLabel(appInfo).toString()
+                            val launchIntent = pm.getLaunchIntentForPackage(pkg)
+                            val isSystem = (appInfo.flags and ApplicationInfo.FLAG_SYSTEM) != 0
+                            val isUpdatedSystem = (appInfo.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0
+                            if ((isSystem && !isUpdatedSystem) || launchIntent == null) return@mapNotNull null
+                            val installerOk = installer == "com.android.vending" || installer == "com.google.android.feedback"
+                            if (!installerOk) return@mapNotNull null
+                            val drawable = pm.getApplicationIcon(pkg)
+                            val bmp = drawable.toBitmap()
+                            val imgBitmap = bmp.asImageBitmap()
+                            AppEntry(pkg, label, imgBitmap, installer, isSystem, isUpdatedSystem)
+                        } catch (e: Exception) {
+                            null
+                        }
+                    }
+                    .distinctBy { it.packageName }
+                    .sortedBy { it.label.lowercase() }
+            }
+            installedApps.addAll(list)
+            try { saveInstalledAppsToPrefs(context, list) } catch (_: Exception) {}
+            if (list.size < 6) showNeedPermissionPrompt = true
+        }
+    }
+
+    // load persisted lists again (keeps UI consistent)
+    LaunchedEffect(Unit) {
+        val loaded = kotlinx.coroutines.withContext(kotlin.coroutines.Dispatchers.IO) { loadBlockedAppsFromPrefs(context) }
+        if (loaded.isNotEmpty()) { blockedApps.clear(); blockedApps.addAll(loaded) }
+        val times = kotlinx.coroutines.withContext(kotlin.coroutines.Dispatchers.IO) { loadAppTimeLimitsFromPrefs(context) }
+        if (times.isNotEmpty()) { appTimeLimits.clear(); appTimeLimits.putAll(times) }
+        val usages = kotlinx.coroutines.withContext(kotlin.coroutines.Dispatchers.IO) { loadAppUsageFromPrefs(context) }
+        if (usages.isNotEmpty()) { appUsage.clear(); appUsage.putAll(usages) }
+    }
+
+    // ---------------- UI (unchanged core layout) ----------------
+    Box(modifier = Modifier
+        .fillMaxSize()
+        .background(Color(0xFF0B0710))
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 18.dp, vertical = 18.dp)
+                .padding(bottom = 140.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Spacer(modifier = Modifier.height(14.dp))
+            Text(
+                text = "Obstrue",
+                color = Color(0xFFEFE7F6),
+                fontSize = 36.sp,
+                fontWeight = FontWeight.ExtraBold
+            )
+
+            Spacer(modifier = Modifier.height(6.dp))
+
+            Text(
+                text = "Block apps and master your focus",
+                color = Color(0xFFBDB0C8),
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Medium
+            )
+            Spacer(modifier = Modifier.height(18.dp))
+
+            // Make big lock button use no-ripple clickable so press feels instant (no fade/ripple)
+            val lockInteraction = remember { MutableInteractionSource() }
+            Box(
+                modifier = Modifier
+                    .size(220.dp)
+                    .scale(if (pressed) 0.92f else 1f)
+                    .clickable(interactionSource = lockInteraction, indication = null) {
+                        isLocked = !isLocked
+                        prefs.edit().putBoolean("is_locked", isLocked).apply()
+                        pressed = true
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                LaunchedEffect(pressed) {
+                    if (pressed) {
+                        kotlinx.coroutines.delay(120)
+                        pressed = false
+                    }
+                }
+                Image(
+                    painter = painterResource(id = if (isLocked) R.drawable.lock else R.drawable.unlock),
+                    contentDescription = if (isLocked) "Locked" else "Unlocked",
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Fit
+                )
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+            // Status label under the large lock icon (no bold)
+            Surface(
+                shape = RoundedCornerShape(20.dp),
+                color = Color(0xFF1E1620),
+                modifier = Modifier.wrapContentWidth()
+            ) {
+                Text(
+                    text = if (isLocked) "Locked" else "Unlocked",
+                    color = Color(0xFFEDE9F2),
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Normal,
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
+                )
+            }
+
+            Spacer(modifier = Modifier.height(18.dp))
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterHorizontally)) {
+                Button(onClick = { onAddAppClicked() }, modifier = Modifier.weight(1f).height(44.dp), shape = RoundedCornerShape(10.dp), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2A1E2B))) {
+                    Text(text = "+ App", color = Color(0xFFF0EAF6), fontSize = 15.sp)
+                }
+
+                Button(onClick = {
+                    if (blockedApps.isNotEmpty()) {
+                        val firstPkg = blockedApps[0].packageName
+                        navController.navigate("schedulegui/${Uri.encode(firstPkg)}", navOptions {
+                            anim { enter = 0; exit = 0; popEnter = 0; popExit = 0 }; launchSingleTop = true
+                        })
+                    } else {
+                        navController.navigate("schedulegui", navOptions {
+                            anim { enter = 0; exit = 0; popEnter = 0; popExit = 0 }; launchSingleTop = true
+                        })
+                    }
+                }, modifier = Modifier.weight(1f).height(44.dp), shape = RoundedCornerShape(10.dp), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2A1E2B))) {
+                    Text(text = "+ Schedule", color = Color(0xFFF0EAF6), fontSize = 15.sp)
+                }
+            }
+
+            Spacer(modifier = Modifier.height(18.dp))
+
+            // ------------------ Random tip selection ------------------
+            val tips = listOf(
+                "Use the Msg & Voices section to display a custom message and sound when you waste time",
+                "Navigate to To-Do section to create a to do list",
+                "Go on the Statistics Section to see App Statistics"
+            )
+            val tipText = remember { tips.random() }
+
+            Text(text = "Tip: $tipText", color = Color(0xFFB9AFC6), fontSize = 12.sp, modifier = Modifier.padding(horizontal = 6.dp))
+            Spacer(modifier = Modifier.height(18.dp))
+
+            Surface(shape = RoundedCornerShape(12.dp), color = Color(0xFF241827), modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.padding(14.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                        Text(text = "Blocked apps", color = Color(0xFFDCD0E7), fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                        Spacer(modifier = Modifier.weight(1f))
+                        Text(text = "${blockedApps.size} items", color = Color(0xFFBFAFC6), fontSize = 12.sp)
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    if (blockedApps.isEmpty()) {
+                        Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                            Text(text = "No apps blocked yet", color = Color(0xFF8F8F8F), fontSize = 14.sp)
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                    } else {
+                        LazyColumn(modifier = Modifier.fillMaxWidth().heightIn(min = 0.dp, max = 240.dp)) {
+                            items(blockedApps) { app ->
+                                // make the app row clickable without ripple/fade
+                                val rowInteraction = remember { MutableInteractionSource() }
+                                Row(modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable(interactionSource = rowInteraction, indication = null) {
+                                        if (isLocked) {
+                                            Toast.makeText(context, "${app.label} is blocked while locked", Toast.LENGTH_SHORT).show()
+                                        } else {
+                                            val launch = context.packageManager.getLaunchIntentForPackage(app.packageName)
+                                            if (launch != null) {
+                                                launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                                context.startActivity(launch)
+                                            } else {
+                                                Toast.makeText(context, "Can't open ${app.label}", Toast.LENGTH_SHORT).show()
+                                            }
+                                        }
+                                    }
+                                    .padding(vertical = 6.dp).padding(horizontal = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically) {
+                                    Image(bitmap = app.iconBitmap, contentDescription = app.label, modifier = Modifier.size(44.dp))
+                                    Spacer(modifier = Modifier.width(12.dp))
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(text = app.label, color = Color(0xFFEFE7F7), fontSize = 15.sp)
+                                        val tm = appTimeLimits[app.packageName] ?: 0
+                                        val used = appUsage[app.packageName] ?: 0
+                                        if (tm > 0 || used > 0) {
+                                            val limitText = if (tm > 0) "Limit: ${formatMinutesReadable(tm)}" else "Limit: —"
+                                            val usedText = "Used: ${used} min"
+                                            Text(text = "$limitText | $usedText", color = Color(0xFFBFAFC6), fontSize = 12.sp)
+                                        }
+                                    }
+
+                                    IconButton(onClick = {
+                                        scheduleTargetPkg = app.packageName
+                                        scheduleTargetLabel = app.label
+                                        scheduleSelectedMinutes = appTimeLimits[app.packageName] ?: 0
+                                        showScheduleDialog = true
+                                    }, modifier = Modifier.size(44.dp)) {
+                                        Image(painter = painterResource(id = R.drawable.clock), contentDescription = "Set schedule", modifier = Modifier.fillMaxSize())
+                                    }
+
+                                    Spacer(modifier = Modifier.width(6.dp))
+
+                                    IconButton(onClick = {
+                                        blockedApps.remove(app)
+                                        removeAppTimeLimitFromPrefs(context, app.packageName)
+                                        appTimeLimits.remove(app.packageName)
+                                        removeAppUsageFromPrefs(context, app.packageName)
+                                        appUsage.remove(app.packageName)
+                                        saveBlockedAppsToPrefs(context, blockedApps)
+                                    }, modifier = Modifier.size(36.dp)) {
+                                        Icon(imageVector = Icons.Default.Close, contentDescription = "Remove", tint = Color(0xFFBFAFC6))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(28.dp))
+            Spacer(modifier = Modifier.height(48.dp))
+        }
+
+        // ----------------- persistent rectangle behind bottom icons -----------------
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .align(Alignment.BottomCenter)
+                .height(bottomBarHeight + 10.dp)
+                .navigationBarsPadding()
+                .background(Color(0xFF0B0710))
+        )
+
+        // Bottom icons Row (no background)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .align(Alignment.BottomCenter)
+                .navigationBarsPadding()
+                .padding(bottom = 12.dp, start = 8.dp, end = 8.dp),
+            horizontalArrangement = Arrangement.Start,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            BottomNavItemWithLabelMain(resId = R.drawable.house, label = "Home", modifier = Modifier.weight(1f)) {
+                navController.navigate("main", navOptions { launchSingleTop = true })
+            }
+            BottomNavItemWithLabelMain(resId = R.drawable.unselectedmsgbutton, label = "Msg & Voices", modifier = Modifier.weight(1f)) {
+                navController.navigate("msg_voices", navOptions { launchSingleTop = true })
+            }
+            BottomNavItemWithLabelMain(resId = R.drawable.statsoutline, label = "Statistics", modifier = Modifier.weight(1f)) {
+                navController.navigate("statistics", navOptions { launchSingleTop = true })
+            }
+            BottomNavItemWithLabelMain(resId = R.drawable.checkboxem, label = "To-do", modifier = Modifier.weight(1f)) {
+                navController.navigate("todo", navOptions { launchSingleTop = true; restoreState = true; popUpTo(navController.graph.startDestinationId) { saveState = true } })
+            }
+        }
+    }
+
+    // permission dialog
+    if (showNeedPermissionPrompt) {
+        AlertDialog(
+            onDismissRequest = { showNeedPermissionPrompt = false },
+            title = { Text("Allow access to apps") },
+            text = {
+                Text("To list Play Store apps and show usage times, Obstrue needs Usage Access. Please grant Usage Access and open Apps settings if required.")
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showNeedPermissionPrompt = false
+                    openUsageAccessSettings()
+                }) { Text("Open Usage Access") }
+            },
+            dismissButton = {
+                Row {
+                    TextButton(onClick = { showNeedPermissionPrompt = false; showAddDialog = true }) { Text("Continue anyway") }
+                    TextButton(onClick = { showNeedPermissionPrompt = false; openManageAllAppsSettings() }) { Text("Open Apps settings") }
+                }
+            }
+        )
+    }
+
+    // schedule dialog...
+    if (showScheduleDialog) {
+        AlertDialog(
+            onDismissRequest = { showScheduleDialog = false; scheduleTargetPkg = null; scheduleTargetLabel = null },
+            title = { Text(scheduleTargetLabel ?: "Set time limit") },
+            text = {
+                Column {
+                    Text(text = "Set a daily time limit for this app. Use the slider or type hours/minutes.", color = Color(0xFFD7CBE0), fontSize = 13.sp)
+                    Spacer(modifier = Modifier.height(12.dp))
+                    val selectedFormatted = formatMinutesReadable(scheduleSelectedMinutes)
+                    Text(text = "Selected: $selectedFormatted", color = Color(0xFFBFAFC6))
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Slider(value = scheduleSelectedMinutes.toFloat(), onValueChange = { v -> scheduleSelectedMinutes = v.toInt() }, valueRange = 0f..(24 * 60).toFloat(), modifier = Modifier.fillMaxWidth())
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        val hours = scheduleSelectedMinutes / 60
+                        val minutes = scheduleSelectedMinutes % 60
+                        OutlinedTextField(value = hours.toString(), onValueChange = { str ->
+                            val filtered = str.filter { it.isDigit() }
+                            val h = filtered.takeIf { it.isNotEmpty() }?.toIntOrNull() ?: 0
+                            val clampedH = h.coerceIn(0, 24)
+                            val currentM = scheduleSelectedMinutes % 60
+                            val newMinutes = if (clampedH == 24) 0 else currentM
+                            scheduleSelectedMinutes = clampedH * 60 + newMinutes
+                        }, label = { Text("Hours") }, singleLine = true, modifier = Modifier.width(120.dp))
+                        OutlinedTextField(value = minutes.toString(), onValueChange = { str ->
+                            val filtered = str.filter { it.isDigit() }
+                            val m = filtered.takeIf { it.isNotEmpty() }?.toIntOrNull() ?: 0
+                            val currentH = scheduleSelectedMinutes / 60
+                            val clampedM = m.coerceIn(0, 59)
+                            val newMinutes = if (currentH == 24) 0 else clampedM
+                            scheduleSelectedMinutes = currentH * 60 + newMinutes
+                        }, label = { Text("Minutes") }, singleLine = true, modifier = Modifier.width(120.dp))
+                        Spacer(modifier = Modifier.weight(1f))
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val pkg = scheduleTargetPkg
+                    if (!pkg.isNullOrBlank()) {
+                        saveAppTimeLimitToPrefs(context, pkg, scheduleSelectedMinutes)
+                        appTimeLimits[pkg] = scheduleSelectedMinutes
+                        coroutineScope.launch {
+                            kotlinx.coroutines.withContext(kotlin.coroutines.Dispatchers.IO) {
+                                try {
+                                    val usageMgr = context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
+                                    val cal = Calendar.getInstance()
+                                    cal.set(Calendar.HOUR_OF_DAY, 0)
+                                    cal.set(Calendar.MINUTE, 0)
+                                    cal.set(Calendar.SECOND, 0)
+                                    cal.set(Calendar.MILLISECOND, 0)
+                                    val begin = cal.timeInMillis
+                                    val end = System.currentTimeMillis()
+                                    val aggregated = usageMgr.queryAndAggregateUsageStats(begin, end)
+                                    val us = aggregated[pkg]
+                                    val usedMs = us?.totalTimeInForeground ?: 0L
+                                    val usedMin = (usedMs / 60000L).toInt()
+                                    saveAppUsageToPrefs(context, pkg, usedMin)
+                                    kotlinx.coroutines.withContext(kotlin.coroutines.Dispatchers.Main) { appUsage[pkg] = usedMin }
+                                } catch (_: Exception) {}
+                            }
+                        }
+                        Toast.makeText(context, "Saved: ${formatMinutesReadable(scheduleSelectedMinutes)} for ${scheduleTargetLabel}", Toast.LENGTH_SHORT).show()
+                    }
+                    showScheduleDialog = false
+                    scheduleTargetPkg = null
+                    scheduleTargetLabel = null
+                }) { Text("Done") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showScheduleDialog = false; scheduleTargetPkg = null; scheduleTargetLabel = null }) { Text("Cancel") }
+            }
+        )
+    }
+
+    if (showAddDialog) {
+        AlertDialog(onDismissRequest = { showAddDialog = false }, title = { Text("Select apps to block") }, text = {
+            Column {
+                Text(text = "Tap an app to add it to blocked list. Use Done when finished.", color = Color(0xFFD7CBE0), fontSize = 13.sp)
+                Spacer(modifier = Modifier.height(12.dp))
+                Surface(modifier = Modifier.fillMaxWidth().heightIn(max = 420.dp), color = Color(0xFF0F0C0E)) {
+                    if (installedApps.isEmpty()) {
+                        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            Text("Loading apps...", color = Color(0xFF8F8F8F))
+                        }
+                    } else {
+                        LazyColumn(modifier = Modifier.padding(8.dp)) {
+                            items(installedApps) { app ->
+                                // installed-apps rows also use no-ripple clickable for instant feel
+                                val addRowInteraction = remember { MutableInteractionSource() }
+                                Row(modifier = Modifier.fillMaxWidth()
+                                    .clickable(interactionSource = addRowInteraction, indication = null) {
+                                        if (blockedApps.none { it.packageName == app.packageName }) {
+                                            blockedApps.add(app)
+                                            saveBlockedAppsToPrefs(context, blockedApps)
+                                            Toast.makeText(context, "${app.label} added to blocked list", Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
+                                    .padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    Image(bitmap = app.iconBitmap, contentDescription = app.label, modifier = Modifier.size(40.dp))
+                                    Spacer(modifier = Modifier.width(12.dp))
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(text = app.label, color = Color.White, fontSize = 14.sp)
+                                        Text(text = app.installerPackage ?: "", color = Color(0xFF8F8F8F), fontSize = 11.sp, maxLines = 1)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }, confirmButton = { TextButton(onClick = { showAddDialog = false }) { Text("Done") } }, dismissButton = { TextButton(onClick = { showAddDialog = false }) { Text("Cancel") } })
+    }
+}
+
+@Composable
+private fun BottomNavItemWithLabelMain(resId: Int, label: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    val iconSize = 32.dp
+    // Use a no-ripple/no-indication clickable here so tapping the bottom nav feels instant with no fade/ripple
+    val noRipple = remember { MutableInteractionSource() }
+    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center, modifier = modifier.clickable(interactionSource = noRipple, indication = null, onClick = onClick).padding(vertical = 6.dp)) {
         Image(painter = painterResource(id = resId), contentDescription = label, modifier = Modifier.size(iconSize), contentScale = ContentScale.Fit)
         Spacer(modifier = Modifier.height(6.dp))
-        Text(label, color = if (enabled) Color(0xFFCFD7E6) else Color(0xFF6E7580), fontSize = 11.sp)
+        Text(text = label, color = Color(0xFFCFD7E6), fontSize = 11.sp, maxLines = 1)
+    }
+}
+
+@Composable
+fun ObstrueSettings(navController: NavHostController) {
+    Box(modifier = Modifier.fillMaxSize().background(Color(0xFF0B0710)), contentAlignment = Alignment.Center) {
+        Text("Settings (placeholder)", color = Color.White)
     }
 }
